@@ -1,8 +1,8 @@
 [package]
-name = "wgpu_context"
+name = "ps-wgpu-context"
 description = "Context for managing WGPU surfaces"
 version = "0.8.0"
-documentation = "https://docs.rs/wgpu_context"
+documentation = "https://docs.rs/ps-wgpu-context"
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true

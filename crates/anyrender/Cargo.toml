@@ -1,8 +1,8 @@
 [package]
-name = "anyrender"
+name = "ps-anyrender"
 description = "2D Canvas abstraction"
 version = "0.12.0"
-documentation = "https://docs.rs/anyrender"
+documentation = "https://docs.rs/ps-anyrender"
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true

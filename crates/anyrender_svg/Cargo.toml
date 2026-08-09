@@ -1,8 +1,8 @@
 [package]
-name = "anyrender_svg"
+name = "ps-anyrender-svg"
 description = "Render SVGs with anyrender"
 version = "0.13.0"
-documentation = "https://docs.rs/anyrender-svg"
+documentation = "https://docs.rs/ps-anyrender-svg"
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true

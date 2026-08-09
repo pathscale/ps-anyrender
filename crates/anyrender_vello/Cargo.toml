@@ -1,8 +1,8 @@
 [package]
-name = "anyrender_vello"
+name = "ps-anyrender-vello"
 description = "Vello backend for anyrender"
 version = "0.13.0"
-documentation = "https://docs.rs/anyrender_vello"
+documentation = "https://docs.rs/ps-anyrender-vello"
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
@@ -12,8 +12,8 @@ edition.workspace = true
 log_frame_times = ["debug_timer/enable"]
 
 [dependencies]
-anyrender = "0.12.0"
-wgpu_context = "0.8.0"
+anyrender.workspace = true
+wgpu_context.workspace = true
 
 debug_timer = { workspace = true }
 kurbo = { workspace = true }

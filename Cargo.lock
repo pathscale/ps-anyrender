@@ -152,24 +152,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyrender"
-version = "0.12.0"
-dependencies = [
- "kurbo",
- "peniko",
- "raw-window-handle",
- "serde",
- "smallvec",
-]
-
-[[package]]
 name = "anyrender_serialize"
 version = "0.6.0"
 dependencies = [
- "anyrender",
  "image",
  "kurbo",
  "peniko",
+ "ps-anyrender",
  "read-fonts",
  "serde",
  "serde_json",
@@ -184,7 +173,6 @@ dependencies = [
 name = "anyrender_skia"
 version = "0.10.0"
 dependencies = [
- "anyrender",
  "ash",
  "ash-window",
  "debug_timer",
@@ -201,49 +189,22 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "peniko",
  "pixels_window_renderer",
+ "ps-anyrender",
  "raw-window-handle",
  "skia-safe",
  "softbuffer_window_renderer",
 ]
 
 [[package]]
-name = "anyrender_svg"
-version = "0.13.0"
-dependencies = [
- "anyrender",
- "image",
- "kurbo",
- "peniko",
- "usvg",
-]
-
-[[package]]
-name = "anyrender_vello"
-version = "0.13.0"
-dependencies = [
- "anyrender",
- "debug_timer",
- "futures-channel",
- "kurbo",
- "peniko",
- "pollster",
- "rustc-hash 2.1.2",
- "vello",
- "wasm-bindgen-futures",
- "wgpu",
- "wgpu_context",
-]
-
-[[package]]
 name = "anyrender_vello_cpu"
 version = "0.15.0"
 dependencies = [
- "anyrender",
  "debug_timer",
  "glifo",
  "kurbo",
  "peniko",
  "pixels_window_renderer",
+ "ps-anyrender",
  "softbuffer_window_renderer",
  "vello_common",
  "vello_cpu",
@@ -253,19 +214,19 @@ dependencies = [
 name = "anyrender_vello_hybrid"
 version = "0.9.0"
 dependencies = [
- "anyrender",
  "debug_timer",
  "futures-channel",
  "glifo",
  "kurbo",
  "peniko",
  "pollster",
+ "ps-anyrender",
+ "ps-wgpu-context",
  "rustc-hash 2.1.2",
  "vello_common",
  "vello_hybrid",
  "wasm-bindgen-futures",
  "wgpu",
- "wgpu_context",
 ]
 
 [[package]]
@@ -444,9 +405,7 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 name = "bunnymark"
 version = "0.1.0"
 dependencies = [
- "anyrender",
  "anyrender_skia",
- "anyrender_vello",
  "anyrender_vello_cpu",
  "anyrender_vello_hybrid",
  "fastrand",
@@ -454,6 +413,8 @@ dependencies = [
  "kurbo",
  "peniko",
  "pixels_window_renderer",
+ "ps-anyrender",
+ "ps-anyrender-vello",
  "winit",
 ]
 
@@ -2490,9 +2451,9 @@ dependencies = [
 name = "pixels_window_renderer"
 version = "0.7.0"
 dependencies = [
- "anyrender",
  "debug_timer",
  "pixels",
+ "ps-anyrender",
 ]
 
 [[package]]
@@ -2511,14 +2472,14 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "player"
 version = "0.1.0"
 dependencies = [
- "anyrender",
  "anyrender_serialize",
  "anyrender_skia",
- "anyrender_vello",
  "anyrender_vello_cpu",
  "anyrender_vello_hybrid",
  "kurbo",
  "peniko",
+ "ps-anyrender",
+ "ps-anyrender-vello",
  "winit",
 ]
 
@@ -2629,6 +2590,53 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "ps-anyrender"
+version = "0.12.0"
+dependencies = [
+ "kurbo",
+ "peniko",
+ "raw-window-handle",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "ps-anyrender-svg"
+version = "0.13.0"
+dependencies = [
+ "image",
+ "kurbo",
+ "peniko",
+ "ps-anyrender",
+ "usvg",
+]
+
+[[package]]
+name = "ps-anyrender-vello"
+version = "0.13.0"
+dependencies = [
+ "debug_timer",
+ "futures-channel",
+ "kurbo",
+ "peniko",
+ "pollster",
+ "ps-anyrender",
+ "ps-wgpu-context",
+ "rustc-hash 2.1.2",
+ "vello",
+ "wasm-bindgen-futures",
+ "wgpu",
+]
+
+[[package]]
+name = "ps-wgpu-context"
+version = "0.8.0"
+dependencies = [
+ "futures-intrusive",
+ "wgpu",
+]
 
 [[package]]
 name = "pxfm"
@@ -2995,13 +3003,13 @@ dependencies = [
 name = "serialize"
 version = "0.1.0"
 dependencies = [
- "anyrender",
  "anyrender_serialize",
  "anyrender_vello_cpu",
  "image",
  "kurbo",
  "parley",
  "peniko",
+ "ps-anyrender",
 ]
 
 [[package]]
@@ -3202,10 +3210,10 @@ dependencies = [
 name = "softbuffer_window_renderer"
 version = "0.7.0"
 dependencies = [
- "anyrender",
  "debug_timer",
  "kurbo",
  "peniko",
+ "ps-anyrender",
  "softbuffer",
 ]
 
@@ -4108,14 +4116,6 @@ dependencies = [
  "log",
  "raw-window-handle",
  "web-sys",
-]
-
-[[package]]
-name = "wgpu_context"
-version = "0.8.0"
-dependencies = [
- "futures-intrusive",
- "wgpu",
 ]
 
 [[package]]
