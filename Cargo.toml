@@ -18,8 +18,8 @@ resolver = "2"
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/dioxuslabs/anyrender"
-repository = "https://github.com/dioxuslabs/anyrender"
+homepage = "https://github.com/pathscale/ps-anyrender"
+repository = "https://github.com/pathscale/ps-anyrender"
 categories = ["gui"]
 edition = "2024"
 rust-version = "1.88.0"
