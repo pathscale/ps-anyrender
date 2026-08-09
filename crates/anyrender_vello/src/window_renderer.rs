@@ -8,8 +8,7 @@ use rustc_hash::FxHashMap;
 use std::future::Future;
 use std::sync::Arc;
 use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions,
-    Scene as VelloScene,
+    AaConfig, RenderParams, Renderer as VelloRenderer, RendererOptions, Scene as VelloScene,
 };
 use wgpu::{
     CompositeAlphaMode, Features, Limits, PresentMode, Texture, TextureFormat, TextureUsages,
@@ -78,7 +77,7 @@ impl VelloRendererOptions {
             features: None,
             limits: None,
             base_color: Color::WHITE,
-            antialiasing_method: AaConfig::Msaa16,
+            antialiasing_method: AaConfig::Area,
             composite_alpha_mode: anyrender::CompositeAlphaMode::Auto,
         }
     }
@@ -276,6 +275,7 @@ impl WindowRenderer for VelloWindowRenderer {
         let existing_device_handle = self
             .wgpu_context
             .find_compatible_device_handle(Some(&surface));
+        let antialiasing_method = self.config.antialiasing_method;
 
         spawn_init(async move {
             let device_handle = match existing_device_handle {
@@ -357,7 +357,7 @@ impl WindowRenderer for VelloWindowRenderer {
             let renderer = VelloRenderer::new(
                 render_surface.device(),
                 RendererOptions {
-                    antialiasing_support: AaSupport::all(),
+                    antialiasing_support: std::iter::once(antialiasing_method).collect(),
                     use_cpu: false,
                     num_init_threads: DEFAULT_THREADS,
                     pipeline_cache: None,
