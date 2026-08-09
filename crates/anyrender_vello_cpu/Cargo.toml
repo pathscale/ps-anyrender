@@ -1,8 +1,8 @@
 [package]
-name = "anyrender_vello_cpu"
+name = "ps-anyrender-vello-cpu"
 description = "vello_cpu backend for anyrender"
 version = "0.15.0"
-documentation = "https://docs.rs/anyrender_vello_cpu"
+documentation = "https://docs.rs/ps-anyrender-vello-cpu"
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true

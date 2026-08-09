@@ -196,21 +196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyrender_vello_cpu"
-version = "0.15.0"
-dependencies = [
- "debug_timer",
- "glifo",
- "kurbo",
- "peniko",
- "pixels_window_renderer",
- "ps-anyrender",
- "softbuffer_window_renderer",
- "vello_common",
- "vello_cpu",
-]
-
-[[package]]
 name = "anyrender_vello_hybrid"
 version = "0.9.0"
 dependencies = [
@@ -406,7 +391,6 @@ name = "bunnymark"
 version = "0.1.0"
 dependencies = [
  "anyrender_skia",
- "anyrender_vello_cpu",
  "anyrender_vello_hybrid",
  "fastrand",
  "image",
@@ -415,6 +399,7 @@ dependencies = [
  "pixels_window_renderer",
  "ps-anyrender",
  "ps-anyrender-vello",
+ "ps-anyrender-vello-cpu",
  "winit",
 ]
 
@@ -2474,12 +2459,12 @@ version = "0.1.0"
 dependencies = [
  "anyrender_serialize",
  "anyrender_skia",
- "anyrender_vello_cpu",
  "anyrender_vello_hybrid",
  "kurbo",
  "peniko",
  "ps-anyrender",
  "ps-anyrender-vello",
+ "ps-anyrender-vello-cpu",
  "winit",
 ]
 
@@ -2628,6 +2613,21 @@ dependencies = [
  "vello",
  "wasm-bindgen-futures",
  "wgpu",
+]
+
+[[package]]
+name = "ps-anyrender-vello-cpu"
+version = "0.15.0"
+dependencies = [
+ "debug_timer",
+ "glifo",
+ "kurbo",
+ "peniko",
+ "pixels_window_renderer",
+ "ps-anyrender",
+ "softbuffer_window_renderer",
+ "vello_common",
+ "vello_cpu",
 ]
 
 [[package]]
@@ -3004,12 +3004,12 @@ name = "serialize"
 version = "0.1.0"
 dependencies = [
  "anyrender_serialize",
- "anyrender_vello_cpu",
  "image",
  "kurbo",
  "parley",
  "peniko",
  "ps-anyrender",
+ "ps-anyrender-vello-cpu",
 ]
 
 [[package]]
