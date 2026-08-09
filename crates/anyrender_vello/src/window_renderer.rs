@@ -459,12 +459,13 @@ impl WindowRenderer for VelloWindowRenderer {
         }
         timer.record_time("present");
 
-        render_surface
-            .device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .unwrap();
+        // Presenting is already bounded by the surface's vsync mode and frame-latency
+        // configuration. Waiting for the GPU to finish here serializes CPU scene building
+        // with GPU execution and prevents high-refresh displays from using the frame queue.
+        // A non-blocking poll still advances mapping callbacks and resource retirement.
+        render_surface.device().poll(wgpu::PollType::Poll).unwrap();
 
-        timer.record_time("wait");
+        timer.record_time("poll");
         timer.print_times("vello: ");
 
         // Empty the Vello scene (memory optimisation)
