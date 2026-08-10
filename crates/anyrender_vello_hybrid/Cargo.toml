@@ -1,8 +1,8 @@
 [package]
-name = "anyrender_vello_hybrid"
+name = "ps-anyrender-vello-hybrid"
 description = "vello_hybrid backend for anyrender"
 version = "0.9.0"
-documentation = "https://docs.rs/anyrender_vello_hybrid"
+documentation = "https://docs.rs/ps-anyrender-vello-hybrid"
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
