@@ -341,7 +341,9 @@ impl WindowRenderer for VelloWindowRenderer {
             // unsupported mode is fatal inside `Surface::configure`, so a
             // mistyped override used to take the whole window down rather than
             // fall back to the default.
-            let supported = surface.get_capabilities(&device_handle.adapter).present_modes;
+            let supported = surface
+                .get_capabilities(&device_handle.adapter)
+                .present_modes;
             let wanted = present_mode_from_env();
             let requested_present_mode = if supported.contains(&wanted) {
                 wanted
