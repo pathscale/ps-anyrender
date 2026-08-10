@@ -88,8 +88,8 @@ jobs:
           key: "wasm32-unknown-unknown"
           cache-all-crates: "true"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo clippy -p anyrender --target wasm32-unknown-unknown -- -D warnings
-      - run: cargo clippy -p anyrender_vello --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy -p ps-anyrender --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy -p ps-anyrender-vello --target wasm32-unknown-unknown -- -D warnings
       - run: cargo clippy -p anyrender_vello_hybrid --target wasm32-unknown-unknown --features webgl -- -D warnings
 
   # just cargo check for now
