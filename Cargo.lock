@@ -196,25 +196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyrender_vello_hybrid"
-version = "0.9.0"
-dependencies = [
- "debug_timer",
- "futures-channel",
- "glifo",
- "kurbo",
- "peniko",
- "pollster",
- "ps-anyrender",
- "ps-wgpu-context",
- "rustc-hash 2.1.2",
- "vello_common",
- "vello_hybrid",
- "wasm-bindgen-futures",
- "wgpu",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -391,7 +372,6 @@ name = "bunnymark"
 version = "0.1.0"
 dependencies = [
  "anyrender_skia",
- "anyrender_vello_hybrid",
  "fastrand",
  "image",
  "kurbo",
@@ -400,6 +380,7 @@ dependencies = [
  "ps-anyrender",
  "ps-anyrender-vello",
  "ps-anyrender-vello-cpu",
+ "ps-anyrender-vello-hybrid",
  "winit",
 ]
 
@@ -2459,12 +2440,12 @@ version = "0.1.0"
 dependencies = [
  "anyrender_serialize",
  "anyrender_skia",
- "anyrender_vello_hybrid",
  "kurbo",
  "peniko",
  "ps-anyrender",
  "ps-anyrender-vello",
  "ps-anyrender-vello-cpu",
+ "ps-anyrender-vello-hybrid",
  "winit",
 ]
 
@@ -2628,6 +2609,25 @@ dependencies = [
  "softbuffer_window_renderer",
  "vello_common",
  "vello_cpu",
+]
+
+[[package]]
+name = "ps-anyrender-vello-hybrid"
+version = "0.9.0"
+dependencies = [
+ "debug_timer",
+ "futures-channel",
+ "glifo",
+ "kurbo",
+ "peniko",
+ "pollster",
+ "ps-anyrender",
+ "ps-wgpu-context",
+ "rustc-hash 2.1.2",
+ "vello_common",
+ "vello_hybrid",
+ "wasm-bindgen-futures",
+ "wgpu",
 ]
 
 [[package]]
