@@ -337,6 +337,17 @@ impl WindowRenderer for VelloWindowRenderer {
                     .then_some(AlphaConversion::Premultiply),
             });
 
+            // Resolve against what this surface actually supports. Asking for an
+            // unsupported mode is fatal inside `Surface::configure`, so a
+            // mistyped override used to take the whole window down rather than
+            // fall back to the default.
+            let supported = surface.get_capabilities(&device_handle.adapter).present_modes;
+            let wanted = present_mode_from_env();
+            let requested_present_mode = if supported.contains(&wanted) {
+                wanted
+            } else {
+                PresentMode::AutoVsync
+            };
             let render_surface = SurfaceRenderer::new(
                 surface,
                 SurfaceRendererConfiguration {
@@ -344,7 +355,7 @@ impl WindowRenderer for VelloWindowRenderer {
                     formats: vec![TextureFormat::Rgba8Unorm, TextureFormat::Bgra8Unorm],
                     width,
                     height,
-                    present_mode: PresentMode::AutoVsync,
+                    present_mode: requested_present_mode,
                     desired_maximum_frame_latency: 2,
                     alpha_mode: composite_alpha_mode,
                     view_formats: vec![],
@@ -470,5 +481,23 @@ impl WindowRenderer for VelloWindowRenderer {
 
         // Empty the Vello scene (memory optimisation)
         self.scene.reset();
+    }
+}
+
+/// Swapchain present mode, overridable for performance work.
+///
+/// `AutoVsync` resolves to FIFO, whose `present` blocks the calling thread
+/// until the next vblank. That call happens on the main thread, so the block
+/// also stalls event handling: a frame costing 3ms of real work still occupies
+/// the thread for a full refresh interval, and input arriving during the wait
+/// is deferred to the frame after next. `BLITZ_PRESENT_MODE=mailbox` releases
+/// the thread immediately and presents the most recent frame, which is the
+/// shape a UI wants; `immediate` is unsynchronised and will tear.
+fn present_mode_from_env() -> PresentMode {
+    match std::env::var("BLITZ_PRESENT_MODE").ok().as_deref() {
+        Some("mailbox") => PresentMode::Mailbox,
+        Some("immediate") => PresentMode::Immediate,
+        Some("fifo") => PresentMode::Fifo,
+        _ => PresentMode::AutoVsync,
     }
 }
