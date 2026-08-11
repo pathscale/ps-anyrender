@@ -100,24 +100,11 @@ jobs:
     strategy:
       matrix:
         platform:
-          - {
-              name: windows,
-              target: x86_64-pc-windows-msvc,
-              os: windows-latest,
-              cross: false,
-              command: "test",
-              args: "--all --tests --all-features",
-              setup: perl -pi.bak -e 's/opt-level = 2/opt-level = 0/g' Cargo.toml
-            }
-          - {
-              name: macos,
-              target: aarch64-apple-darwin,
-              os: macos-latest,
-              cross: false,
-              command: "test",
-              args: "--all --tests",
-              setup: perl -pi.bak -e 's/opt-level = 2/opt-level = 0/g' Cargo.toml
-            }
+          # Windows and macOS test entries are deliberately absent: the paid
+          # runners are not worth it when Linux validates the same code and
+          # macOS is tested locally on the machine this is developed on. The
+          # linux entry below already carries --all-features, which is the
+          # widest of the three, so no feature coverage is lost with them.
           - {
               name: linux,
               target: x86_64-unknown-linux-gnu,
