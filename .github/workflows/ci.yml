@@ -24,7 +24,7 @@ jobs:
   # version. Building is likely sufficient as runtime errors varying between rust versions is very unlikely.
   build-msrv:
     name: "MSRV Build [Rust 1.92]"
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -36,7 +36,7 @@ jobs:
 
   build-features-default:
     name: "Build [default features]"
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -46,7 +46,7 @@ jobs:
 
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -57,7 +57,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -68,7 +68,7 @@ jobs:
 
   doc:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,7 +76,7 @@ jobs:
 
   check-wasm:
     name: "Check [wasm32 + webgl]"
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -121,7 +121,7 @@ jobs:
           - {
               name: linux,
               target: x86_64-unknown-linux-gnu,
-              os: ubuntu-latest,
+              os: ubicloud-standard-8,
               cross: false,
               command: "test",
               args: "--all --tests --all-features",
@@ -150,7 +150,7 @@ jobs:
           cache-bin: ${{ matrix.os != 'macos-latest' }} # works around https://github.com/Swatinem/rust-cache/issues/341
 
       - name: Install development libraries on ubuntu
-        if: ${{ matrix.platform.os == 'ubuntu-latest' }}
+        if: ${{ matrix.platform.os == 'ubicloud-standard-8' }}
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
 
       - name: Setup
