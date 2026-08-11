@@ -32,7 +32,7 @@ anyrender_skia = { version = "0.10.0", path = "./crates/anyrender_skia" }
 anyrender_vello = { package = "ps-anyrender-vello", version = "0.13.0", path = "./crates/anyrender_vello" }
 anyrender_vello_cpu = { package = "ps-anyrender-vello-cpu", version = "0.15.0", path = "./crates/anyrender_vello_cpu" }
 anyrender_vello_hybrid = { package = "ps-anyrender-vello-hybrid", version = "0.9.0", path = "./crates/anyrender_vello_hybrid" }
-anyrender_svg = { package = "ps-anyrender-svg", version = "0.13.0", path = "./crates/anyrender_svg" }
+anyrender_svg = { package = "ps-anyrender-svg", version = "0.14.0", path = "./crates/anyrender_svg" }
 wgpu_context = { package = "ps-wgpu-context", version = "0.8.0", path = "./crates/wgpu_context" }
 pixels_window_renderer = { version = "0.7.0", path = "./crates/pixels_window_renderer" }
 softbuffer_window_renderer = { version = "0.7.0", path = "./crates/softbuffer_window_renderer" }
@@ -70,7 +70,7 @@ softbuffer = "0.4"
 pixels = "0.17"
 
 # SVG
-usvg = { version = "0.46.0", default-features = false }
+usvg = { version = "0.48.1", default-features = false }
 image = { version = "0.25", default-features = false }
 
 # Other dependencies
