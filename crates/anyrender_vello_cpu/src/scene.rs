@@ -51,6 +51,70 @@ impl VelloCpuScenePainter {
             .render_to_pixmap(&mut self.resources, &mut pixmap);
         pixmap
     }
+
+    /// Draw the scene so far back over itself, filtered, inside `clip`.
+    ///
+    /// This is `backdrop-filter`. A layer filter runs over the layer's *own*
+    /// content, so it can never express "blur what is behind me" — the input
+    /// for that is `FilterSource::BackgroundImage`, which vello declares and
+    /// implements nowhere. Rather than wait for it, take the backdrop the only
+    /// way it is actually available: render what has been drawn up to this
+    /// point, then draw that image back through a filtered layer clipped to the
+    /// same shape. The element's own content is then drawn on top by the
+    /// ordinary layer the caller pushes next.
+    ///
+    /// `render_to_pixmap` takes `&self`, which is what makes this possible
+    /// mid-scene: the context is snapshotted, not consumed, and keeps
+    /// accumulating afterwards.
+    ///
+    /// It costs a full render of the frame per backdrop-filtered layer, so it
+    /// is priced for a handful of glass panels and not for a page of them.
+    #[cfg(feature = "filters")]
+    fn paint_filtered_backdrop(
+        &mut self,
+        backdrop_filter: Option<Arc<Filter>>,
+        transform: Affine,
+        clip: &impl Shape,
+    ) {
+        let Some(backdrop_filter) = backdrop_filter else {
+            return;
+        };
+        // Same restriction as the layer filter path above: vello_cpu declines
+        // to apply filters while multithreaded.
+        if cfg!(feature = "multithreading") {
+            return;
+        }
+        let Some(filter) = crate::filters::convert_filter(backdrop_filter) else {
+            return;
+        };
+        let (width, height) = (self.render_ctx.width(), self.render_ctx.height());
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let mut backdrop = Pixmap::new(width, height);
+        self.render_ctx
+            .render_to_pixmap(&mut self.resources, &mut backdrop);
+
+        let canvas = Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
+        self.render_ctx.set_transform(transform);
+        self.render_ctx.push_layer(
+            Some(&clip.into_path(DEFAULT_TOLERANCE)),
+            None,
+            None,
+            None,
+            Some(filter),
+        );
+        // The snapshot is in device pixels, so it is drawn untransformed
+        // whatever transform the layer itself carries.
+        self.render_ctx.set_transform(Affine::IDENTITY);
+        self.render_ctx.set_paint(PaintType::Image(ImageBrush {
+            image: ImageSource::Pixmap(Arc::new(backdrop)),
+            sampler: peniko::ImageSampler::default(),
+        }));
+        self.render_ctx.fill_rect(&canvas);
+        self.render_ctx.pop_layer();
+    }
 }
 
 impl RenderContext for VelloCpuScenePainter {}
@@ -66,7 +130,7 @@ impl PaintScene for VelloCpuScenePainter {
         transform: Affine,
         clip: &impl Shape,
         filter: Option<Arc<Filter>>,
-        _backdrop_filter: Option<Arc<Filter>>,
+        backdrop_filter: Option<Arc<Filter>>,
     ) {
         #[cfg(feature = "filters")]
         let filter = filter
@@ -78,6 +142,11 @@ impl PaintScene for VelloCpuScenePainter {
             let _ = filter;
             None
         };
+
+        #[cfg(feature = "filters")]
+        self.paint_filtered_backdrop(backdrop_filter, transform, clip);
+        #[cfg(not(feature = "filters"))]
+        let _ = backdrop_filter;
 
         self.render_ctx.set_transform(transform);
         self.render_ctx.push_layer(
