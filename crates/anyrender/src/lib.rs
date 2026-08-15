@@ -46,6 +46,10 @@ use peniko::{BlendMode, Color, Fill, FontData, ImageBrushRef, StyleRef};
 use recording::RenderCommand;
 use std::{any::Any, sync::Arc};
 
+pub mod backdrop;
+pub use backdrop::{
+    BackdropBatch, BackdropOp, BackdropPlanner, Boundary, FramePlan, PlanningScene,
+};
 pub mod filters;
 pub use filters::Filter;
 pub mod wasm_send_sync;
