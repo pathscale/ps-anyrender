@@ -16,6 +16,7 @@ impl ImageRenderer for VelloCpuImageRenderer {
             scene: VelloCpuScenePainter {
                 render_ctx: RenderContext::new(width as u16, height as u16),
                 resources: Resources::new(),
+                open_layers: 0,
             },
         }
     }
