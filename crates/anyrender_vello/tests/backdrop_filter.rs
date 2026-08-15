@@ -13,10 +13,15 @@
 //! on. See `src/backdrop.rs`.
 //!
 //! Needs a GPU. It runs through `VelloImageRenderer`, which is headless - no
-//! window, no surface, no event loop - but still a real adapter, so this is a
-//! local and macOS/Metal-or-Vulkan check rather than something a CPU-only
-//! runner can answer. The GPU-free half of the same work, how many passes a
-//! page costs, is asserted in `ps-blitz`'s `glass_pass_count.rs`.
+//! window, no surface, no event loop - but still a real adapter, so a runner
+//! with no GPU cannot answer it: CI's Linux box has none, and
+//! `VelloImageRenderer::new` does not decline, it panics on "No compatible
+//! device found".
+//!
+//! So every test here asks [`gpu_available`] first and says out loud when it
+//! skips, rather than being marked `#[ignore]` and never running anywhere. The
+//! GPU-free half of the same work, how many passes a page costs, is asserted in
+//! `ps-blitz`'s `glass_pass_count.rs` and runs everywhere.
 
 use anyrender::{
     PaintScene,
@@ -25,13 +30,42 @@ use anyrender::{
 };
 use kurbo::{Affine, Rect};
 use peniko::{Color, Fill, Mix};
-use ps_anyrender_vello::VelloImageRenderer;
+use ps_anyrender_vello::{VelloImageRenderer, wgpu};
 use std::sync::Arc;
 
 const WIDTH: u32 = 200;
 const HEIGHT: u32 = 100;
 /// The seam sits at the halfway mark, so a blur has to bleed across it.
 const SEAM: u32 = WIDTH / 2;
+
+/// Whether this machine has a GPU adapter at all.
+///
+/// Probed rather than assumed. The alternative is a panic from inside the
+/// renderer's constructor, which reads as a broken test rather than an absent
+/// device and is what turned this file red on a CPU-only runner.
+fn gpu_available() -> bool {
+    // Built the way `wgpu_context` builds its own, so the probe answers for the
+    // same backends the renderer will actually try.
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::from_env().unwrap_or_default(),
+        flags: wgpu::InstanceFlags::from_build_config().with_env(),
+        backend_options: wgpu::BackendOptions::from_env_or_default(),
+        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+        display: None,
+    });
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_ok()
+}
+
+/// Announce a skip, so a green run still says which of the two it was.
+fn require_gpu(test: &str) -> bool {
+    if gpu_available() {
+        return true;
+    }
+    eprintln!(
+        "{test}: no GPU adapter on this machine, so the backdrop cannot be rendered. Skipped."
+    );
+    false
+}
 
 fn pixel(buffer: &[u8], x: u32, y: u32) -> [u8; 3] {
     let offset = ((y * WIDTH + x) * 4) as usize;
@@ -82,6 +116,9 @@ fn scene(backdrop: Option<Arc<Filter>>) -> Vec<u8> {
 /// at all, both halves must stay pure.
 #[test]
 fn the_unfiltered_seam_is_hard() {
+    if !require_gpu("the_unfiltered_seam_is_hard") {
+        return;
+    }
     let buffer = scene(None);
 
     assert_eq!(pixel(&buffer, SEAM - 8, 50), [0, 0, 0]);
@@ -90,6 +127,9 @@ fn the_unfiltered_seam_is_hard() {
 
 #[test]
 fn a_backdrop_blur_bleeds_the_seam_across_itself() {
+    if !require_gpu("a_backdrop_blur_bleeds_the_seam_across_itself") {
+        return;
+    }
     let blurred = scene(Some(Arc::new(Filter::single(FilterEffect::blur(12.0)))));
 
     // Sampled as a ramp rather than at one point. A single sample far from the
@@ -122,6 +162,9 @@ fn a_backdrop_blur_bleeds_the_seam_across_itself() {
 /// they can share a snapshot at all. Both must blur, not just the first.
 #[test]
 fn two_panels_both_blur() {
+    if !require_gpu("two_panels_both_blur") {
+        return;
+    }
     let blurred = render_to_buffer::<VelloImageRenderer, _>(
         |scene| {
             scene.fill(
@@ -182,6 +225,9 @@ fn two_panels_both_blur() {
 /// its own scrollbar.
 #[test]
 fn a_clip_around_a_filtered_layer_survives_the_cut() {
+    if !require_gpu("a_clip_around_a_filtered_layer_survives_the_cut") {
+        return;
+    }
     let buffer = render_to_buffer::<VelloImageRenderer, _>(
         |scene| {
             scene.fill(
@@ -230,6 +276,9 @@ fn a_clip_around_a_filtered_layer_survives_the_cut() {
 /// the entire performance problem.
 #[test]
 fn the_blur_stays_inside_the_element() {
+    if !require_gpu("the_blur_stays_inside_the_element") {
+        return;
+    }
     let blurred = scene(Some(Arc::new(Filter::single(FilterEffect::blur(12.0)))));
 
     // The panel spans x 40..160. Well outside it, on both sides.
