@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyrender::{Filter, NormalizedCoord, Paint, PaintRef, PaintScene, RenderContext};
 use glifo::FontEmbolden;
-use kurbo::{Affine, Diagonal2, Rect, Shape, Stroke};
+use kurbo::{Affine, BezPath, Diagonal2, Rect, Shape, Stroke};
 use peniko::{BlendMode, Color, Fill, FontData, ImageBrush, StyleRef};
 use vello_cpu::{ImageSource, PaintType, Pixmap};
 
@@ -39,22 +39,86 @@ fn convert_image_cached(image: &peniko::ImageData) -> ImageSource {
         .clone()
 }
 
+/// One layer open on `render_ctx`, kept so it can be closed and reopened.
+///
+/// Everything `push_layer` was given, because reopening has to reproduce it
+/// exactly: a clip that came back a fraction different would move the seam
+/// between the two halves of the layer's content.
+#[derive(Clone)]
+struct OpenLayer {
+    transform: Affine,
+    clip: Option<BezPath>,
+    blend: Option<BlendMode>,
+    alpha: Option<f32>,
+    #[cfg(feature = "filters")]
+    filter: Option<vello_common::filter_effects::Filter>,
+}
+
 pub struct VelloCpuScenePainter {
     pub render_ctx: vello_cpu::RenderContext,
     pub resources: vello_cpu::Resources,
-    /// How many layers are open on `render_ctx` right now.
+    /// The layers open on `render_ctx` right now, outermost first.
     ///
-    /// Tracked because a backdrop snapshot is only legal at depth zero:
-    /// `render_to_pixmap` asserts `!wide.has_layers()`, so asking for one while
-    /// a layer is open aborts the process. See `paint_filtered_backdrop`.
-    ///
-    /// Public because the other fields are: this struct is constructed by
-    /// literal outside this crate, so hiding one field would break those
-    /// callers for no gain. Start it at zero and leave it alone.
-    pub open_layers: u32,
+    /// A backdrop snapshot is only legal at depth zero: `render_to_pixmap`
+    /// asserts `!wide.has_layers()`, and asking for one while a layer is open
+    /// aborts the process rather than dropping an effect. Blitz-style painters
+    /// reach `push_layer` several frames deep, so on a real page that depth is
+    /// never zero and this backend used to decline every backdrop it was asked
+    /// for. Recording the stack is what lets it unwind to zero, take the
+    /// snapshot, and put the stack back. See `paint_filtered_backdrop`.
+    layers: Vec<OpenLayer>,
 }
 
 impl VelloCpuScenePainter {
+    /// A painter over a fresh `width` by `height` context.
+    ///
+    /// A constructor rather than a struct literal because the layer stack is
+    /// private: it is an invariant of this type that it mirrors what is open on
+    /// `render_ctx`, and a caller that could set it could break the snapshot.
+    pub fn new(width: u16, height: u16) -> Self {
+        Self {
+            render_ctx: vello_cpu::RenderContext::new(width, height),
+            resources: vello_cpu::Resources::new(),
+            layers: Vec::new(),
+        }
+    }
+
+    /// How many layers are open. Was a public field; kept as a reader because
+    /// it is genuinely useful to a caller and costs nothing.
+    pub fn open_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Push a layer onto the context and remember it.
+    fn open(&mut self, layer: OpenLayer) {
+        self.render_ctx.set_transform(layer.transform);
+        #[cfg(feature = "filters")]
+        let filter = layer.filter.clone();
+        #[cfg(not(feature = "filters"))]
+        let filter = None;
+        self.render_ctx
+            .push_layer(layer.clip.as_ref(), layer.blend, layer.alpha, None, filter);
+        self.layers.push(layer);
+    }
+
+    /// Close every open layer, leaving the context at depth zero.
+    ///
+    /// The stack itself is kept: this is half of a round trip, and the caller
+    /// puts it back with [`Self::rewind`].
+    #[cfg(feature = "filters")]
+    fn unwind(&mut self) {
+        for _ in 0..self.layers.len() {
+            self.render_ctx.pop_layer();
+        }
+    }
+
+    /// Reopen everything [`Self::unwind`] closed, in the order it was pushed.
+    #[cfg(feature = "filters")]
+    fn rewind(&mut self) {
+        for layer in std::mem::take(&mut self.layers) {
+            self.open(layer);
+        }
+    }
     pub fn finish(mut self) -> Pixmap {
         let mut pixmap = Pixmap::new(self.render_ctx.width(), self.render_ctx.height());
         self.render_ctx
@@ -97,32 +161,37 @@ impl VelloCpuScenePainter {
         let Some(filter) = crate::filters::convert_filter(backdrop_filter) else {
             return;
         };
-        // A backdrop snapshot renders the scene so far into a pixmap, and
-        // `render_to_pixmap` asserts that no layer is open. Blitz-style
-        // painters reach `push_layer` several frames deep, so that assert does
-        // not hold on any real page and the process aborts with
-        //
-        //     some layers haven't been popped yet
-        //
-        // rather than dropping an effect. Declining is the only honest answer
-        // this backend can give until it renders backdrops as their own pass
-        // the way `anyrender_vello` does; a panic is not an answer at all.
-        //
-        // The effect still applies at depth zero, which is where a page-level
-        // backdrop sits. What is lost is a backdrop nested inside another
-        // layer, and it is lost visibly rather than fatally.
-        if self.open_layers > 0 {
-            return;
-        }
-
         let (width, height) = (self.render_ctx.width(), self.render_ctx.height());
         if width == 0 || height == 0 {
             return;
         }
 
+        // `render_to_pixmap` asserts `!wide.has_layers()`, so the snapshot has
+        // to be taken at depth zero. Blitz-style painters reach `push_layer`
+        // several frames deep, so on a real page that depth is never zero: this
+        // used to abort the process with "some layers haven't been popped yet",
+        // and then, once that was caught, to decline every backdrop it was
+        // asked for. Neither is an answer.
+        //
+        // Closing the stack and reopening it is the answer, and it is also the
+        // *right* backdrop: what a filtered element sits over is the frame as
+        // composited so far, which is exactly what closing every layer
+        // produces. `anyrender_vello` reaches the same place by cutting the
+        // frame into segments; it has to, because a GPU render consumes the
+        // scene. Here the context is snapshotted rather than consumed, so the
+        // round trip is the whole mechanism.
+        //
+        // The one thing it costs: a layer carrying alpha or a blend mode is
+        // composited twice, once for the content before this point and once for
+        // the content after, and those two differ from one composite of both
+        // wherever they overlap. Clips, which is nearly all of what a page
+        // pushes, are exact. `anyrender_vello` makes the same trade for the
+        // same reason.
+        self.unwind();
         let mut backdrop = Pixmap::new(width, height);
         self.render_ctx
             .render_to_pixmap(&mut self.resources, &mut backdrop);
+        self.rewind();
 
         let canvas = Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
         self.render_ctx.set_transform(transform);
@@ -149,7 +218,7 @@ impl RenderContext for VelloCpuScenePainter {}
 impl PaintScene for VelloCpuScenePainter {
     fn reset(&mut self) {
         self.render_ctx.reset();
-        self.open_layers = 0;
+        self.layers.clear();
     }
 
     fn push_layer(
@@ -166,41 +235,47 @@ impl PaintScene for VelloCpuScenePainter {
             .and_then(crate::filters::convert_filter)
             .filter(|_| cfg!(not(feature = "multithreading")));
 
+        // Without the feature there is nothing to convert a filter into, and
+        // `OpenLayer` does not carry one, so the argument is simply dropped.
         #[cfg(not(feature = "filters"))]
-        let filter = {
-            let _ = filter;
-            None
-        };
+        let _ = filter;
 
         #[cfg(feature = "filters")]
         self.paint_filtered_backdrop(backdrop_filter, transform, clip);
         #[cfg(not(feature = "filters"))]
         let _ = backdrop_filter;
 
-        self.render_ctx.set_transform(transform);
-        self.render_ctx.push_layer(
-            Some(&clip.into_path(DEFAULT_TOLERANCE)),
-            Some(blend.into()),
-            Some(alpha),
-            None,
+        let entry = OpenLayer {
+            transform,
+            clip: Some(clip.into_path(DEFAULT_TOLERANCE)),
+            blend: Some(blend.into()),
+            alpha: Some(alpha),
+            #[cfg(feature = "filters")]
             filter,
-        );
-        self.open_layers += 1;
+        };
+        self.open(entry);
     }
 
     fn push_clip_layer(&mut self, transform: Affine, clip: &impl Shape) {
-        self.render_ctx.set_transform(transform);
-        self.render_ctx
-            .push_clip_layer(&clip.into_path(DEFAULT_TOLERANCE));
-        self.open_layers += 1;
+        // A clip is a layer like any other here, recorded the same way, because
+        // the snapshot has to be able to close and reopen it. `push_clip_layer`
+        // is only the cheaper spelling.
+        self.open(OpenLayer {
+            transform,
+            clip: Some(clip.into_path(DEFAULT_TOLERANCE)),
+            blend: None,
+            alpha: None,
+            #[cfg(feature = "filters")]
+            filter: None,
+        });
     }
 
     fn pop_layer(&mut self) {
         self.render_ctx.pop_layer();
-        // Saturating: a caller that pops more than it pushed is already in
-        // trouble, and going through zero here would silently re-enable a
-        // snapshot inside a layer, which is the abort this counter prevents.
-        self.open_layers = self.open_layers.saturating_sub(1);
+        // A caller that pops more than it pushed is already in trouble; going
+        // negative here would leave the stack disagreeing with the context,
+        // and the snapshot unwinds by that stack.
+        self.layers.pop();
     }
 
     fn stroke<'a>(

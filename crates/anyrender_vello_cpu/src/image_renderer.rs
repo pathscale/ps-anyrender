@@ -1,7 +1,7 @@
 use crate::VelloCpuScenePainter;
 use anyrender::{ImageRenderer, RenderContext as AnyRenderContext};
 use debug_timer::debug_timer;
-use vello_cpu::{RenderContext, RenderMode, Resources};
+use vello_cpu::{RenderContext, RenderMode};
 
 pub struct VelloCpuImageRenderer {
     scene: VelloCpuScenePainter,
@@ -13,11 +13,7 @@ impl ImageRenderer for VelloCpuImageRenderer {
 
     fn new(width: u32, height: u32) -> Self {
         Self {
-            scene: VelloCpuScenePainter {
-                render_ctx: RenderContext::new(width as u16, height as u16),
-                resources: Resources::new(),
-                open_layers: 0,
-            },
+            scene: VelloCpuScenePainter::new(width as u16, height as u16),
         }
     }
 
