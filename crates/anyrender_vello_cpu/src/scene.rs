@@ -42,6 +42,16 @@ fn convert_image_cached(image: &peniko::ImageData) -> ImageSource {
 pub struct VelloCpuScenePainter {
     pub render_ctx: vello_cpu::RenderContext,
     pub resources: vello_cpu::Resources,
+    /// How many layers are open on `render_ctx` right now.
+    ///
+    /// Tracked because a backdrop snapshot is only legal at depth zero:
+    /// `render_to_pixmap` asserts `!wide.has_layers()`, so asking for one while
+    /// a layer is open aborts the process. See `paint_filtered_backdrop`.
+    ///
+    /// Public because the other fields are: this struct is constructed by
+    /// literal outside this crate, so hiding one field would break those
+    /// callers for no gain. Start it at zero and leave it alone.
+    pub open_layers: u32,
 }
 
 impl VelloCpuScenePainter {
@@ -87,6 +97,24 @@ impl VelloCpuScenePainter {
         let Some(filter) = crate::filters::convert_filter(backdrop_filter) else {
             return;
         };
+        // A backdrop snapshot renders the scene so far into a pixmap, and
+        // `render_to_pixmap` asserts that no layer is open. Blitz-style
+        // painters reach `push_layer` several frames deep, so that assert does
+        // not hold on any real page and the process aborts with
+        //
+        //     some layers haven't been popped yet
+        //
+        // rather than dropping an effect. Declining is the only honest answer
+        // this backend can give until it renders backdrops as their own pass
+        // the way `anyrender_vello` does; a panic is not an answer at all.
+        //
+        // The effect still applies at depth zero, which is where a page-level
+        // backdrop sits. What is lost is a backdrop nested inside another
+        // layer, and it is lost visibly rather than fatally.
+        if self.open_layers > 0 {
+            return;
+        }
+
         let (width, height) = (self.render_ctx.width(), self.render_ctx.height());
         if width == 0 || height == 0 {
             return;
@@ -121,6 +149,7 @@ impl RenderContext for VelloCpuScenePainter {}
 impl PaintScene for VelloCpuScenePainter {
     fn reset(&mut self) {
         self.render_ctx.reset();
+        self.open_layers = 0;
     }
 
     fn push_layer(
@@ -156,16 +185,22 @@ impl PaintScene for VelloCpuScenePainter {
             None,
             filter,
         );
+        self.open_layers += 1;
     }
 
     fn push_clip_layer(&mut self, transform: Affine, clip: &impl Shape) {
         self.render_ctx.set_transform(transform);
         self.render_ctx
             .push_clip_layer(&clip.into_path(DEFAULT_TOLERANCE));
+        self.open_layers += 1;
     }
 
     fn pop_layer(&mut self) {
         self.render_ctx.pop_layer();
+        // Saturating: a caller that pops more than it pushed is already in
+        // trouble, and going through zero here would silently re-enable a
+        // snapshot inside a layer, which is the abort this counter prevents.
+        self.open_layers = self.open_layers.saturating_sub(1);
     }
 
     fn stroke<'a>(
