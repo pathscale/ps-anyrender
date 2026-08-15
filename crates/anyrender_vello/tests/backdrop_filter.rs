@@ -114,6 +114,115 @@ fn a_backdrop_blur_bleeds_the_seam_across_itself() {
     );
 }
 
+/// Two panels, which is where the segmenting is actually exercised.
+///
+/// One filtered layer needs one cut and proves the mechanism. Two need the
+/// parts that are easy to get wrong and invisible in a single-panel test: a
+/// second snapshot, a second set of pool slots, and the decision about whether
+/// they can share a snapshot at all. Both must blur, not just the first.
+#[test]
+fn two_panels_both_blur() {
+    let blurred = render_to_buffer::<VelloImageRenderer, _>(
+        |scene| {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::BLACK,
+                None,
+                &Rect::new(0.0, 0.0, SEAM as f64, HEIGHT as f64),
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &Rect::new(SEAM as f64, 0.0, WIDTH as f64, HEIGHT as f64),
+            );
+            // Both straddle the seam, stacked vertically, far enough apart in y
+            // that neither reads the other.
+            for band in [(0.0, 40.0), (60.0, 100.0)] {
+                let panel = Rect::new(40.0, band.0, 160.0, band.1);
+                scene.push_layer(
+                    Mix::Normal,
+                    1.0,
+                    Affine::IDENTITY,
+                    &panel,
+                    None,
+                    Some(Arc::new(Filter::single(FilterEffect::blur(8.0)))),
+                );
+                scene.pop_layer();
+            }
+        },
+        WIDTH,
+        HEIGHT,
+    );
+
+    for y in [20, 80] {
+        let ramp: Vec<u8> = (0..5)
+            .map(|i| pixel(&blurred, SEAM - 12 + i * 6, y)[0])
+            .collect();
+        println!("ramp at y={y}: {ramp:?}");
+        assert!(
+            ramp.windows(2).all(|w| w[1] >= w[0]),
+            "the panel at y={y} should ramp across the seam, got {ramp:?}"
+        );
+        assert!(
+            ramp.iter().any(|v| (32..=224).contains(v)),
+            "the panel at y={y} did not blur, got {ramp:?}"
+        );
+    }
+}
+
+/// A filtered layer inside a clip has to stay inside it after the cut.
+///
+/// Cutting the scene leaves the ancestor clips open in a segment about to be
+/// rasterised, so the painter closes them and pushes them again on the far
+/// side. If that replay is wrong the panel's blur paints outside the container
+/// that was clipping it, which in the application is a glass panel drawn over
+/// its own scrollbar.
+#[test]
+fn a_clip_around_a_filtered_layer_survives_the_cut() {
+    let buffer = render_to_buffer::<VelloImageRenderer, _>(
+        |scene| {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::BLACK,
+                None,
+                &Rect::new(0.0, 0.0, WIDTH as f64, HEIGHT as f64),
+            );
+            // The container clips away everything below y=50.
+            scene.push_clip_layer(Affine::IDENTITY, &Rect::new(0.0, 0.0, WIDTH as f64, 50.0));
+            // A panel that would otherwise cover the whole frame in white.
+            let panel = Rect::new(0.0, 0.0, WIDTH as f64, HEIGHT as f64);
+            scene.push_layer(
+                Mix::Normal,
+                1.0,
+                Affine::IDENTITY,
+                &panel,
+                None,
+                Some(Arc::new(Filter::single(FilterEffect::blur(4.0)))),
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, Color::WHITE, None, &panel);
+            scene.pop_layer();
+            scene.pop_layer();
+        },
+        WIDTH,
+        HEIGHT,
+    );
+
+    assert_eq!(
+        pixel(&buffer, 100, 20),
+        [255, 255, 255],
+        "inside the clip the panel paints"
+    );
+    assert_eq!(
+        pixel(&buffer, 100, 80),
+        [0, 0, 0],
+        "below the clip it must not: the ancestor clip was lost across the cut"
+    );
+}
+
 /// Outside the panel nothing is filtered, and the seam stays hard.
 ///
 /// The failure this catches is a blur that ran over the whole frame instead of
