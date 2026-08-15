@@ -289,7 +289,7 @@ impl BackdropPlanner {
     }
 }
 
-/// A [`PaintScene`](crate::PaintScene) that draws nothing and only plans.
+/// A [`PaintScene`] that draws nothing and only plans.
 ///
 /// The point of it is that pass count is a property of the scene, not of the
 /// GPU. Painting a real document into this answers "how many passes does this
