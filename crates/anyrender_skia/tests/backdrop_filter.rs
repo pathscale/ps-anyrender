@@ -56,7 +56,14 @@ fn scene(backdrop: Option<Arc<Filter>>) -> Vec<u8> {
                 let panel = Rect::new(40.0, 0.0, 160.0, HEIGHT as f64);
                 // Alpha 1.0 and nothing drawn inside: whatever shows through is
                 // the backdrop, filtered or not.
-                scene.push_layer(Mix::Normal, 1.0, Affine::IDENTITY, &panel, None, Some(backdrop));
+                scene.push_layer(
+                    Mix::Normal,
+                    1.0,
+                    Affine::IDENTITY,
+                    &panel,
+                    None,
+                    Some(backdrop),
+                );
                 scene.pop_layer();
             }
         },
