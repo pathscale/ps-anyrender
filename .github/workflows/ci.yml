@@ -90,7 +90,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy -p ps-anyrender --target wasm32-unknown-unknown -- -D warnings
       - run: cargo clippy -p ps-anyrender-vello --target wasm32-unknown-unknown -- -D warnings
-      - run: cargo clippy -p anyrender_vello_hybrid --target wasm32-unknown-unknown --features webgl -- -D warnings
+      - run: cargo clippy -p ps-anyrender-vello-hybrid --target wasm32-unknown-unknown --features webgl -- -D warnings
 
   # just cargo check for now
   matrix_test:
