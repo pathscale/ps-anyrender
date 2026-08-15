@@ -28,3 +28,8 @@ pollster = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { workspace = true }
+
+[dev-dependencies]
+# The backdrop test renders through VelloImageRenderer, which needs a real
+# adapter. Headless, but not CPU-only.
+anyrender = { workspace = true }

@@ -18,7 +18,10 @@ use wgpu_context::{
     TextureConfiguration, WGPUContext,
 };
 
+use crate::backdrop::BackdropPool;
+use crate::scene::BackdropState;
 use crate::{DEFAULT_THREADS, VelloScenePainter};
+use anyrender::BackdropPlanner;
 
 /// Drive the wgpu init future. On wasm32 we spawn it onto the JS microtask
 /// queue (blocking is not allowed). On native we drive it inline with
@@ -140,6 +143,8 @@ pub struct VelloWindowRenderer {
 
     // Resources
     texture_handles: FxHashMap<ResourceId, ImageData>,
+    /// Snapshot and blur textures for `backdrop-filter`, reused across frames.
+    backdrop: BackdropPool,
 }
 
 impl VelloWindowRenderer {
@@ -157,6 +162,7 @@ impl VelloWindowRenderer {
             window_handle: None,
             scene: VelloScene::new(),
             texture_handles: FxHashMap::default(),
+            backdrop: BackdropPool::default(),
         }
     }
 
@@ -406,6 +412,11 @@ impl WindowRenderer for VelloWindowRenderer {
 
     fn suspend(&mut self) {
         if let RenderState::Active(active) = &mut self.render_state {
+            // The backdrop pool first: its textures are registered *and* in the
+            // handle map, so draining the map underneath it would leave vello
+            // holding overrides for textures on a device that is going away.
+            self.backdrop
+                .clear(&mut active.renderer, &mut self.texture_handles);
             // Unregister all textures on suspend
             for (_id, handle) in self.texture_handles.drain() {
                 active.renderer.unregister_texture(handle);
@@ -430,12 +441,24 @@ impl WindowRenderer for VelloWindowRenderer {
         debug_timer!(timer, feature = "log_frame_times");
 
         // Regenerate the vello scene
-        draw_fn(&mut VelloScenePainter {
+        let frame = (render_surface.config.width, render_surface.config.height);
+        let mut painter = VelloScenePainter {
             inner: &mut self.scene,
             renderer: Some(&mut state.renderer),
             device_handle: Some(&render_surface.device_handle),
             texture_handles: Some(&mut self.texture_handles),
-        });
+            backdrop: Some(BackdropState {
+                device: &render_surface.device_handle.device,
+                pool: &mut self.backdrop,
+                frame,
+                planner: BackdropPlanner::new(),
+                stack: Vec::new(),
+                segments: Default::default(),
+                jobs: 0,
+            }),
+        };
+        draw_fn(&mut painter);
+        let (segments, _plan) = painter.finish_backdrops();
         timer.record_time("cmd");
 
         let Ok(texture_view) = render_surface.target_texture_view() else {
@@ -448,21 +471,22 @@ impl WindowRenderer for VelloWindowRenderer {
             state.renderer.mark_override_image_dirty(handle);
         }
 
-        state
-            .renderer
-            .render_to_texture(
-                render_surface.device(),
-                render_surface.queue(),
-                &self.scene,
-                &texture_view,
-                &RenderParams {
-                    base_color: self.config.base_color,
-                    width: render_surface.config.width,
-                    height: render_surface.config.height,
-                    antialiasing_method: self.config.antialiasing_method,
-                },
-            )
-            .expect("failed to render to texture");
+        crate::backdrop::execute(
+            &mut self.backdrop,
+            &mut state.renderer,
+            render_surface.device(),
+            render_surface.queue(),
+            &segments,
+            &self.scene,
+            &texture_view,
+            &RenderParams {
+                base_color: self.config.base_color,
+                width: render_surface.config.width,
+                height: render_surface.config.height,
+                antialiasing_method: self.config.antialiasing_method,
+            },
+        )
+        .expect("failed to render to texture");
         timer.record_time("render");
 
         drop(texture_view);
