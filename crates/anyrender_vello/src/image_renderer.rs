@@ -5,13 +5,17 @@ use vello::{Renderer as VelloRenderer, RendererOptions, Scene as VelloScene};
 use wgpu::TextureUsages;
 use wgpu_context::{BufferRenderer, BufferRendererConfig, WGPUContext};
 
+use crate::backdrop::BackdropPool;
+use crate::scene::BackdropState;
 use crate::{DEFAULT_THREADS, VelloScenePainter};
+use anyrender::BackdropPlanner;
 
 pub struct VelloImageRenderer {
     buffer_renderer: BufferRenderer,
     vello_renderer: VelloRenderer,
     scene: VelloScene,
     texture_handles: FxHashMap<ResourceId, ImageData>,
+    backdrop: BackdropPool,
 }
 
 impl RenderContext for VelloImageRenderer {}
@@ -51,6 +55,7 @@ impl ImageRenderer for VelloImageRenderer {
             vello_renderer,
             scene: VelloScene::new(),
             texture_handles: FxHashMap::default(),
+            backdrop: BackdropPool::default(),
         }
     }
 
@@ -77,28 +82,44 @@ impl ImageRenderer for VelloImageRenderer {
         draw_fn: F,
         cpu_buffer: &mut [u8],
     ) {
-        draw_fn(&mut VelloScenePainter {
+        let size = self.buffer_renderer.size();
+        let mut painter = VelloScenePainter {
             inner: &mut self.scene,
             renderer: Some(&mut self.vello_renderer),
             device_handle: None,
             texture_handles: Some(&mut self.texture_handles),
-        });
+            // Backdrops work here as well as in a window. That is deliberate:
+            // it is the only way to assert in pixels that a backdrop actually
+            // blurred, without a surface, a window or an event loop.
+            backdrop: Some(BackdropState {
+                device: self.buffer_renderer.device(),
+                pool: &mut self.backdrop,
+                frame: (size.width, size.height),
+                planner: BackdropPlanner::new(),
+                stack: Vec::new(),
+                segments: Default::default(),
+                jobs: 0,
+            }),
+        };
+        draw_fn(&mut painter);
+        let (segments, _plan) = painter.finish_backdrops();
 
-        let size = self.buffer_renderer.size();
-        self.vello_renderer
-            .render_to_texture(
-                self.buffer_renderer.device(),
-                self.buffer_renderer.queue(),
-                &self.scene,
-                &self.buffer_renderer.target_texture_view(),
-                &vello::RenderParams {
-                    base_color: vello::peniko::Color::TRANSPARENT,
-                    width: size.width,
-                    height: size.height,
-                    antialiasing_method: vello::AaConfig::Area,
-                },
-            )
-            .expect("Got non-Send/Sync error from rendering");
+        crate::backdrop::execute(
+            &mut self.backdrop,
+            &mut self.vello_renderer,
+            self.buffer_renderer.device(),
+            self.buffer_renderer.queue(),
+            &segments,
+            &self.scene,
+            &self.buffer_renderer.target_texture_view(),
+            &vello::RenderParams {
+                base_color: vello::peniko::Color::TRANSPARENT,
+                width: size.width,
+                height: size.height,
+                antialiasing_method: vello::AaConfig::Area,
+            },
+        )
+        .expect("Got non-Send/Sync error from rendering");
 
         self.buffer_renderer.copy_texture_to_buffer(cpu_buffer);
 
