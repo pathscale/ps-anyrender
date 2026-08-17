@@ -195,14 +195,31 @@ impl BackdropPool {
         self.snapshots.get(index).map(|slot| &slot.view)
     }
 
-    /// Tell vello every registered texture's contents changed, which they did.
+    /// Mark only the textures one boundary actually wrote.
     ///
-    /// Without this the atlas serves last frame's copy, and the visible result
-    /// is a backdrop that lags the page by one frame - subtle when still, and
-    /// obvious the moment anything scrolls.
-    pub(crate) fn mark_dirty(&self, renderer: &mut VelloRenderer) {
-        for slot in self.snapshots.iter().chain(&self.blurred) {
+    /// A dirty override image is copied into vello's atlas at the start of the
+    /// next render, a full frame each. This used to mark every slot the pool
+    /// owns, before every segment, so a frame cut into N boundaries paid N+1
+    /// copies of *all* of them rather than of the one or two that changed. On
+    /// a page whose panels each force their own boundary that is the
+    /// difference between a handful of full-frame copies and a few dozen.
+    ///
+    /// Everything a segment reads was written by the boundary immediately
+    /// before it: that boundary's snapshot, and the blur results it produced.
+    /// Nothing else can have changed since the last render, so nothing else
+    /// needs recopying.
+    pub(crate) fn mark_boundary_dirty(
+        &self,
+        renderer: &mut VelloRenderer,
+        boundary: &SegmentBoundary,
+    ) {
+        if let Some(slot) = self.snapshots.get(boundary.snapshot) {
             renderer.mark_override_image_dirty(&slot.image);
+        }
+        for job in &boundary.jobs {
+            if let Some(slot) = self.blurred.get(job.slot) {
+                renderer.mark_override_image_dirty(&slot.image);
+            }
         }
     }
 
@@ -240,14 +257,28 @@ pub(crate) fn execute(
     final_target: &wgpu::TextureView,
     params: &vello::RenderParams,
 ) -> Result<(), vello::Error> {
+    /*
+     * Mark before every render, not once per frame: the atlas copy happens at
+     * the start of a render, so a texture written by the previous submission
+     * is only picked up if it has been marked since.
+     *
+     * Only the *previous* boundary's textures, though. A segment reads what
+     * the boundary immediately before it wrote and nothing else, so marking
+     * every slot the pool owns re-copied a full-frame texture per slot per
+     * segment for no benefit. On a page where each panel forces its own
+     * boundary that was the dominant cost in a 450ms frame.
+     *
+     * The first segment reads nothing, so it marks nothing.
+     */
+    let mut previous: Option<&SegmentBoundary> = None;
+
     for (scene, boundary) in segments.scenes.iter().zip(&segments.boundaries) {
         let Some(target) = pool.snapshot_view(boundary.snapshot).cloned() else {
             continue;
         };
-        // Before every render, not once per frame: the atlas copy happens at the
-        // start of a render, so a snapshot written by the previous submission is
-        // only picked up if it has been marked since.
-        pool.mark_dirty(renderer);
+        if let Some(previous) = previous {
+            pool.mark_boundary_dirty(renderer, previous);
+        }
         renderer.render_to_texture(device, queue, scene, &target, params)?;
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -255,9 +286,12 @@ pub(crate) fn execute(
         });
         pool.encode_boundary(device, &mut encoder, boundary);
         queue.submit([encoder.finish()]);
+        previous = Some(boundary);
     }
 
-    pool.mark_dirty(renderer);
+    if let Some(previous) = previous {
+        pool.mark_boundary_dirty(renderer, previous);
+    }
     renderer.render_to_texture(device, queue, final_scene, final_target, params)
 }
 
