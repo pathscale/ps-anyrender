@@ -2592,7 +2592,7 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "debug_timer",
  "futures-channel",
