@@ -54,7 +54,7 @@ peniko = "0.6"
 kurbo = "0.13.1"
 color = "0.3"
 glifo = { version = "0.1" }
-vello = { version = "0.9", features = ["wgpu"] }
+vello = { package = "ps-vello", version = "0.10.0", path = "../ps-vello/vello", features = ["wgpu"] }
 vello_cpu = { version = "0.0.9", default-features = false, features = [
   "std",
   "text",

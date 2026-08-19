@@ -384,7 +384,13 @@ pub(crate) fn execute(
     if let Some(previous) = previous {
         pool.mark_boundary_dirty(renderer, previous);
     }
-    renderer.render_to_texture(device, queue, final_scene, final_target, params)
+    // `render_to_texture` hands back the bump buffer so a caller can size the
+    // next frame from what this one used. That belongs to the window renderer,
+    // which drives the frame loop; a backdrop segment is one pass inside a
+    // frame it does not own, so the handle is dropped here.
+    renderer
+        .render_to_texture(device, queue, final_scene, final_target, params)
+        .map(|_bump| ())
 }
 
 /// Grow `slots` to cover `index` and make sure that slot is `size`.
