@@ -489,6 +489,12 @@ impl WindowRenderer for VelloWindowRenderer {
         .expect("failed to render to texture");
         timer.record_time("render");
 
+        // Before the present, which can bail out early: the pool has to be told
+        // the frame ended on every frame, or a run of failed presents would look
+        // to it like a run of frames that never reserved anything.
+        self.backdrop
+            .end_frame(&mut state.renderer, &mut self.texture_handles);
+
         drop(texture_view);
 
         if render_surface.maybe_blit_and_present().is_err() {

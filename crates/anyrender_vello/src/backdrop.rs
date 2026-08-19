@@ -96,6 +96,16 @@ struct Slot {
     size: (u32, u32),
 }
 
+/// Frames a slot may go unused before it is released.
+///
+/// Not zero, because the count of boundaries moves with what is on screen: a
+/// menu opening and closing must not free the textures it needed and allocate
+/// them again a frame later. A little over a second at 120Hz is long enough
+/// that ordinary interaction never pays a reallocation, and short enough that
+/// leaving a heavy view gives the memory back while the user is still looking
+/// at the lighter one.
+const IDLE_FRAMES_BEFORE_RELEASE: u32 = 180;
+
 /// Textures reused across frames for snapshots and blur results.
 ///
 /// Allocating these per frame would mean a texture creation and a vello
@@ -103,12 +113,30 @@ struct Slot {
 /// into vello's override map and forces an atlas copy. They are keyed by
 /// position in the frame rather than by element, which is enough because the
 /// same page produces the same sequence of boundaries every frame.
+///
+/// # Why the pool shrinks
+///
+/// Each snapshot slot is a full-frame `Rgba8Unorm` texture: 19 MB at 2688x1800.
+/// The pool used to grow to the worst frame a session ever rendered and hold
+/// that for the life of the process, because the only release was [`Self::clear`]
+/// and that runs on suspend. A window resize made it worse, since the resized
+/// slot was replaced at its own index while the vector kept its length.
+///
+/// Measured on AgencyZero: 94 GPU allocations, 898 MB, in a window whose busiest
+/// frame wanted 25 layers and two backdrop boundaries.
 #[derive(Default)]
 pub struct BackdropPool {
     snapshots: Vec<Slot>,
     scratch: Vec<Slot>,
     blurred: Vec<Slot>,
     pipeline: Option<BlurPipeline>,
+    /// Highest `boundary`/`job` index reserved during the frame being built.
+    /// `None` before the first reservation, which is how a frame that wants no
+    /// backdrops at all is told apart from one that wants a single slot 0.
+    frame_snapshot_high_water: Option<usize>,
+    frame_job_high_water: Option<usize>,
+    /// Consecutive frames whose high water mark was below the pool's length.
+    idle_frames: u32,
 }
 
 /// Everything a snapshot or blur slot hands back to the scene being built.
@@ -135,6 +163,15 @@ impl BackdropPool {
         frame: (u32, u32),
         region: (u32, u32),
     ) -> SlotIds {
+        // What this frame actually asked for, so `end_frame` can tell a pool
+        // that is merely large from one that is still in use.
+        self.frame_snapshot_high_water = Some(
+            self.frame_snapshot_high_water
+                .map_or(boundary, |high| high.max(boundary)),
+        );
+        self.frame_job_high_water =
+            Some(self.frame_job_high_water.map_or(job, |high| high.max(job)));
+
         let snapshot = ensure(
             &mut self.snapshots,
             boundary,
@@ -223,6 +260,54 @@ impl BackdropPool {
         }
     }
 
+    /// Close the frame, and give back textures it did not need.
+    ///
+    /// Called once per frame after the last reservation. A pool that stayed
+    /// larger than the frame wanted for [`IDLE_FRAMES_BEFORE_RELEASE`]
+    /// consecutive frames is trimmed to that high water mark.
+    ///
+    /// The delay is what makes this safe to do at all: boundary counts move
+    /// with the page, and trimming on the first small frame would reallocate a
+    /// 19 MB texture as soon as the user reopened whatever they just closed.
+    /// Waiting means the common case pays nothing and only a real change of
+    /// view releases anything.
+    pub fn end_frame(
+        &mut self,
+        renderer: &mut VelloRenderer,
+        handles: &mut FxHashMap<ResourceId, ImageData>,
+    ) {
+        // `None` means no backdrop was reserved at all this frame, so every
+        // slot is spare. `Some(n)` means indices 0..=n were used.
+        let snapshots_wanted = self.frame_snapshot_high_water.map_or(0, |high| high + 1);
+        let jobs_wanted = self.frame_job_high_water.map_or(0, |high| high + 1);
+        self.frame_snapshot_high_water = None;
+        self.frame_job_high_water = None;
+
+        let oversized = self.snapshots.len() > snapshots_wanted
+            || self.blurred.len() > jobs_wanted
+            || self.scratch.len() > jobs_wanted;
+        match release_decision(oversized, self.idle_frames) {
+            Release::Keep { idle_frames } => {
+                self.idle_frames = idle_frames;
+                return;
+            }
+            Release::Now => self.idle_frames = 0,
+        }
+
+        // Registered textures have to leave vello's override map as well, or
+        // the atlas keeps a copy of a texture nothing will ever draw again.
+        for slot in self.snapshots.drain(snapshots_wanted..) {
+            handles.remove(&slot.id);
+            renderer.unregister_texture(slot.image);
+        }
+        for slot in self.blurred.drain(jobs_wanted..) {
+            handles.remove(&slot.id);
+            renderer.unregister_texture(slot.image);
+        }
+        // Scratch is never registered, so dropping it is the whole release.
+        self.scratch.truncate(jobs_wanted);
+    }
+
     /// Release every texture and its vello registration.
     ///
     /// Called on suspend, because the registrations name a device that is about
@@ -237,6 +322,9 @@ impl BackdropPool {
             renderer.unregister_texture(slot.image);
         }
         self.scratch.clear();
+        self.frame_snapshot_high_water = None;
+        self.frame_job_high_water = None;
+        self.idle_frames = 0;
     }
 }
 
@@ -393,5 +481,92 @@ fn raw_slot(device: &wgpu::Device, size: (u32, u32), label: &str) -> Slot {
         size,
         texture,
         view,
+    }
+}
+
+/// Whether `end_frame` should release the spare slots yet.
+///
+/// Split out from [`BackdropPool::end_frame`] because the pool itself owns GPU
+/// textures and cannot be built without a device, while this decision is the
+/// part that was wrong: the pool used to have no release path at all outside
+/// suspend, so it held the largest frame a session ever rendered forever.
+#[derive(Debug, PartialEq, Eq)]
+enum Release {
+    /// Not yet. Carries the idle count to store back.
+    Keep { idle_frames: u32 },
+    /// Long enough: trim to the frame's high water mark.
+    Now,
+}
+
+fn release_decision(oversized: bool, idle_frames: u32) -> Release {
+    if !oversized {
+        // In use at its current size, so the streak restarts.
+        return Release::Keep { idle_frames: 0 };
+    }
+    let idle_frames = idle_frames.saturating_add(1);
+    if idle_frames < IDLE_FRAMES_BEFORE_RELEASE {
+        Release::Keep { idle_frames }
+    } else {
+        Release::Now
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::{IDLE_FRAMES_BEFORE_RELEASE, Release, release_decision};
+
+    /// A pool the frame is still filling must never be trimmed.
+    #[test]
+    fn a_pool_in_use_is_kept_and_resets_the_streak() {
+        assert_eq!(
+            release_decision(false, 5),
+            Release::Keep { idle_frames: 0 },
+            "a frame that wanted every slot must restart the idle count",
+        );
+    }
+
+    /// The delay is the whole reason this is safe: a menu closing must not free
+    /// a 19 MB texture that reopening it needs a frame later.
+    #[test]
+    fn a_briefly_oversized_pool_is_kept() {
+        assert_eq!(release_decision(true, 0), Release::Keep { idle_frames: 1 },);
+        assert_eq!(
+            release_decision(true, IDLE_FRAMES_BEFORE_RELEASE - 2),
+            Release::Keep {
+                idle_frames: IDLE_FRAMES_BEFORE_RELEASE - 1
+            },
+        );
+    }
+
+    /// The bug: without this the pool never released anything outside suspend.
+    #[test]
+    fn a_persistently_oversized_pool_is_released() {
+        assert_eq!(
+            release_decision(true, IDLE_FRAMES_BEFORE_RELEASE - 1),
+            Release::Now,
+            "after the full idle run the spare slots must be given back",
+        );
+    }
+
+    /// One busy frame in the middle of a quiet run defers the release rather
+    /// than letting a stale streak trim a pool that is needed again.
+    #[test]
+    fn a_single_busy_frame_restarts_the_wait() {
+        let mut idle = 0;
+        for _ in 0..(IDLE_FRAMES_BEFORE_RELEASE - 1) {
+            match release_decision(true, idle) {
+                Release::Keep { idle_frames } => idle = idle_frames,
+                Release::Now => panic!("released before the idle run completed"),
+            }
+        }
+        match release_decision(false, idle) {
+            Release::Keep { idle_frames } => idle = idle_frames,
+            Release::Now => panic!("a frame in use must not release"),
+        }
+        assert_eq!(idle, 0);
+        assert_eq!(
+            release_decision(true, idle),
+            Release::Keep { idle_frames: 1 }
+        );
     }
 }
