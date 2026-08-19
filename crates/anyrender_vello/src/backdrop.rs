@@ -263,8 +263,12 @@ impl BackdropPool {
     /// Close the frame, and give back textures it did not need.
     ///
     /// Called once per frame after the last reservation. A pool that stayed
-    /// larger than the frame wanted for [`IDLE_FRAMES_BEFORE_RELEASE`]
-    /// consecutive frames is trimmed to that high water mark.
+    /// larger than the frame wanted, for a run of consecutive frames a little
+    /// over a second long at 120Hz, is trimmed to that high water mark.
+    //
+    // The exact count is `IDLE_FRAMES_BEFORE_RELEASE`, which is private, so it
+    // is described rather than linked: a public doc comment cannot name it
+    // without failing the documentation build.
     ///
     /// The delay is what makes this safe to do at all: boundary counts move
     /// with the page, and trimming on the first small frame would reallocate a
