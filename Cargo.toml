@@ -32,7 +32,7 @@ anyrender_skia = { version = "0.10.0", path = "./crates/anyrender_skia" }
 anyrender_vello = { package = "ps-anyrender-vello", version = "0.13.1", path = "./crates/anyrender_vello" }
 anyrender_vello_cpu = { package = "ps-anyrender-vello-cpu", version = "0.16.0", path = "./crates/anyrender_vello_cpu" }
 anyrender_vello_hybrid = { package = "ps-anyrender-vello-hybrid", version = "0.10.0", path = "./crates/anyrender_vello_hybrid" }
-anyrender_svg = { package = "ps-anyrender-svg", version = "0.14.0", path = "./crates/anyrender_svg" }
+anyrender_svg = { package = "ps-anyrender-svg", version = "0.15.0", path = "./crates/anyrender_svg" }
 wgpu_context = { package = "ps-wgpu-context", version = "0.8.0", path = "./crates/wgpu_context" }
 pixels_window_renderer = { version = "0.7.0", path = "./crates/pixels_window_renderer" }
 softbuffer_window_renderer = { version = "0.7.0", path = "./crates/softbuffer_window_renderer" }
@@ -70,7 +70,14 @@ softbuffer = "0.4"
 pixels = "0.17"
 
 # SVG
-usvg = { version = "0.48.1", default-features = false }
+#
+# `ps-usvg`, the fork this graph actually compiles against. `anyrender_svg`
+# 0.14.0 was published while a `[patch.crates-io]` redirected `usvg` at a resvg
+# branch, so `render_svg_tree` was built against that fork's `Arc<Tree>` while
+# its published signature named the registry usvg's `Tree`. A consumer on the
+# fork then gets `expected &Tree, found &Arc<Tree>` from a crate that compiles
+# fine in this workspace. Naming the fork makes the published signature true.
+usvg = { package = "ps-usvg", version = "0.48.1", default-features = false }
 image = { version = "0.25", default-features = false }
 
 # Other dependencies
