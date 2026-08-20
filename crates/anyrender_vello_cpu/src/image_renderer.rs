@@ -1,7 +1,7 @@
 use crate::VelloCpuScenePainter;
 use anyrender::{ImageRenderer, RenderContext as AnyRenderContext};
 use debug_timer::debug_timer;
-use vello_cpu::{RenderContext, RenderMode};
+use vello_cpu::{PixmapMut, RenderContext};
 
 pub struct VelloCpuImageRenderer {
     scene: VelloCpuScenePainter,
@@ -34,13 +34,18 @@ impl ImageRenderer for VelloCpuImageRenderer {
         self.scene.render_ctx.flush();
         timer.record_time("flush");
 
-        self.scene.render_ctx.render_to_buffer(
-            &mut self.scene.resources,
-            buffer,
-            self.scene.render_ctx.width(),
-            self.scene.render_ctx.height(),
-            RenderMode::OptimizeSpeed,
-        );
+        // `render_to_buffer` is gone in vello_cpu 0.2. `render` takes anything
+        // that converts into a `PixmapMut`, and `PixmapMut::new` is the wrapper
+        // for a raw byte slice. It returns `None` unless the buffer is exactly
+        // `width * height * 4`, which is the invariant the old call took on
+        // trust from its width and height arguments.
+        let width = self.scene.render_ctx.width();
+        let height = self.scene.render_ctx.height();
+        let target = PixmapMut::new(width, height, buffer)
+            .expect("render buffer must be width * height * 4 bytes");
+        self.scene
+            .render_ctx
+            .render(target, &mut self.scene.resources);
         timer.record_time("render");
 
         timer.print_times("vello_cpu: ");

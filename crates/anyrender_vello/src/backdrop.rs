@@ -384,7 +384,13 @@ pub(crate) fn execute(
     if let Some(previous) = previous {
         pool.mark_boundary_dirty(renderer, previous);
     }
-    renderer.render_to_texture(device, queue, final_scene, final_target, params)
+    // `render_to_texture` returns the bump buffer it allocated in ps-vello, so a
+    // caller that wants to recycle it can. This path renders straight into a
+    // texture and keeps nothing, so the handle is dropped and the result is
+    // narrowed back to the `()` this function has always returned.
+    renderer
+        .render_to_texture(device, queue, final_scene, final_target, params)
+        .map(|_| ())
 }
 
 /// Grow `slots` to cover `index` and make sure that slot is `size`.
