@@ -121,8 +121,9 @@ impl VelloCpuScenePainter {
     }
     pub fn finish(mut self) -> Pixmap {
         let mut pixmap = Pixmap::new(self.render_ctx.width(), self.render_ctx.height());
-        self.render_ctx
-            .render_to_pixmap(&mut self.resources, &mut pixmap);
+        // `render_to_pixmap(resources, target)` became `render(target, resources)`
+        // in vello_cpu 0.2: the same two operands, in the opposite order.
+        self.render_ctx.render(&mut pixmap, &mut self.resources);
         pixmap
     }
 
@@ -189,8 +190,7 @@ impl VelloCpuScenePainter {
         // same reason.
         self.unwind();
         let mut backdrop = Pixmap::new(width, height);
-        self.render_ctx
-            .render_to_pixmap(&mut self.resources, &mut backdrop);
+        self.render_ctx.render(&mut backdrop, &mut self.resources);
         self.rewind();
 
         let canvas = Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
@@ -375,7 +375,10 @@ impl PaintScene for VelloCpuScenePainter {
     ) {
         self.render_ctx.set_transform(transform);
         self.render_ctx.set_paint(PaintType::Solid(color));
+        // vello_cpu 0.2 added `invert`, which fills outside the rect instead of
+        // inside so the same primitive can draw an inset shadow. This trait
+        // method is the outer-shadow path, so `false` is the existing behaviour.
         self.render_ctx
-            .fill_blurred_rounded_rect(&rect, radius as f32, std_dev as f32);
+            .fill_blurred_rounded_rect(&rect, radius as f32, std_dev as f32, false);
     }
 }
