@@ -1,0 +1,115 @@
+# Publish the workspace to crates.io.
+#
+# Every release here has been a hand-run `cargo publish`, and the failure mode
+# is not that someone forgets to run it: it is that the version bump lands and
+# the publish does not. `pub mod backdrop` shipped to master without a version
+# change, so crates.io kept serving 0.12.0 whose tarball has no `backdrop.rs`,
+# and every dependent that used the API became unpublishable. That was invisible
+# from inside the repository, because a path dependency resolves against the
+# working tree and always compiles.
+#
+# Triggered by hand rather than on push to master. Publishing is irreversible -
+# a version can never be reused - so it should be a decision, not a side effect
+# of merging. `dry_run` is the default for exactly that reason.
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Package and verify without uploading"
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: "sparse"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: ${{ inputs.dry_run && 'Verify' || 'Publish' }}
+    runs-on: ubicloud-standard-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install development libraries
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
+
+      # Dependency order, not alphabetical. A publish resolves its dependencies
+      # from the registry, so `anyrender_vello` cannot go out until the
+      # `anyrender` it needs is already there. Getting this wrong fails with
+      # "failed to select a version", which reads as a version problem rather
+      # than an ordering one.
+      #
+      # `--no-verify` is deliberately not used: verification is what catches a
+      # crate that compiles against the working tree but not against what the
+      # registry actually serves, which is the whole class of bug this exists
+      # to stop.
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          crates=(
+            ps-anyrender
+            ps-anyrender-vello
+            ps-anyrender-vello-cpu
+            ps-anyrender-vello-hybrid
+            ps-anyrender-svg
+          )
+          for crate in "${crates[@]}"; do
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::group::dry-run $crate"
+              cargo publish --dry-run -p "$crate"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Already-published versions are skipped rather than failing the
+            # run. Publishing is per-crate and only some of them move in a
+            # given release, so a whole-workspace publish is normally a partial
+            # one, and "crate already exists" is the expected answer for the
+            # rest.
+            #
+            # Asked of the registry API rather than `cargo info`, which resolves
+            # against the workspace when run inside it and answers with the
+            # local path version:
+            #
+            #   version: 0.15.0 (from ./crates/anyrender_vello_cpu)
+            #
+            # That is the manifest talking back, so every crate looks published
+            # at whatever the tree says and the skip becomes meaningless.
+            version=$(cargo metadata --format-version 1 --no-deps \
+              | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$crate'))")
+            published=$(curl -sS "https://crates.io/api/v1/crates/$crate" \
+              -H "User-Agent: pathscale-publish-workflow" \
+              | python3 -c "import json,sys;print('\n'.join(v['num'] for v in json.load(sys.stdin).get('versions',[])))" \
+              || true)
+            if printf '%s\n' "$published" | grep -qx "$version"; then
+              echo "$crate $version is already on crates.io, skipping"
+              continue
+            fi
+
+            echo "::group::publish $crate $version"
+            cargo publish -p "$crate"
+            echo "::endgroup::"
+
+            # The index is not immediately readable after an upload, and the
+            # next crate in the list resolves against it.
+            echo "waiting for the index to carry $crate $version"
+            for _ in $(seq 1 30); do
+              if curl -sS "https://crates.io/api/v1/crates/$crate" \
+                   -H "User-Agent: pathscale-publish-workflow" \
+                 | python3 -c "import json,sys;print('\n'.join(v['num'] for v in json.load(sys.stdin).get('versions',[])))" \
+                 | grep -qx "$version"; then
+                echo "$crate $version is live"
+                break
+              fi
+              sleep 10
+            done
+          done
