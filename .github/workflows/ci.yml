@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  # For `check-wasm-hybrid`, which is manual on purpose. See its comment.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -74,8 +76,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo doc --no-deps
 
+  # Manual. Run it from the Actions tab when you are working on wasm.
+  #
+  # Nothing here ships to wasm today: this repository's consumers are native,
+  # and the one crate the `webgl` half existed to check,
+  # `anyrender_vello_hybrid`, is excluded from the workspace until it is ported
+  # to ps-vello 0.2, which redesigned the hybrid `Scene` out from under it. So
+  # the job spent a runner on every push to answer a question nobody was asking,
+  # and then went red for a reason unrelated to whatever was being pushed.
+  #
+  # Kept rather than deleted, because the answer stops being free the day
+  # someone does target wasm, and a job that has to be reconstructed from
+  # scratch is a job that does not get reconstructed.
   check-wasm:
     name: "Check [wasm32 + webgl]"
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +105,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy -p ps-anyrender --target wasm32-unknown-unknown -- -D warnings
       - run: cargo clippy -p ps-anyrender-vello --target wasm32-unknown-unknown -- -D warnings
-      - run: cargo clippy -p ps-anyrender-vello-hybrid --target wasm32-unknown-unknown --features webgl -- -D warnings
+      # `--manifest-path`, not `-p`: the crate is outside the workspace, so
+      # cargo cannot select it by package name.
+      - run: >
+          cargo clippy --manifest-path crates/anyrender_vello_hybrid/Cargo.toml
+          --target wasm32-unknown-unknown --features webgl -- -D warnings
 
   # just cargo check for now
   matrix_test:
