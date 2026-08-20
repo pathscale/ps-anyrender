@@ -53,15 +53,27 @@ linebender_resource_handle = "0.1"
 peniko = "0.6"
 kurbo = "0.13.1"
 color = "0.3"
-glifo = { version = "0.1" }
-vello = { version = "0.9", features = ["wgpu"] }
-vello_cpu = { version = "0.0.9", default-features = false, features = [
+# The ps-vello fork, by version.
+#
+# These were linebender's crates: `vello_cpu = "0.0.9"` resolved *their* copy,
+# so the fork's rewritten `fine/mod.rs` was never in the graph no matter what
+# any consumer pinned. Chuzz's headless capture aborted the process on any page
+# with a backdrop, at
+#
+#   vello_cpu-0.0.9/src/fine/mod.rs:657: internal error: entered unreachable code
+#
+# which is upstream code failing, in a build that was supposed to be running the
+# fork. The fork could not be published while it shared their names; it is
+# `ps-vello-*` now, so naming it here is what actually puts it in the graph.
+glifo = { package = "ps-glifo", version = "0.3.0" }
+vello = { package = "ps-vello", version = "0.10.0", features = ["wgpu"] }
+vello_cpu = { package = "ps-vello-cpu", version = "0.2.0", default-features = false, features = [
   "std",
   "text",
   "u8_pipeline",
 ] }
-vello_hybrid = { version = "0.0.9" }
-vello_common = { version = "0.0.9" }
+vello_hybrid = { package = "ps-vello-hybrid", version = "0.2.0" }
+vello_common = { package = "ps-vello-common", version = "0.2.0" }
 
 # Rendering
 wgpu = "29"
