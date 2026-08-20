@@ -450,7 +450,7 @@ fn assert_glyph_run_preserved(restored: &Scene) {
     match &restored.commands[0] {
         RenderCommand::GlyphRun(glyph_run) => {
             assert_eq!(glyph_run.font_size, 16.0);
-            assert_eq!(glyph_run.hint, false);
+            assert!(!glyph_run.hint);
             assert_eq!(glyph_run.brush_alpha, 1.0);
             assert_eq!(glyph_run.transform, Affine::translate((10.0, 50.0)));
             assert_eq!(glyph_run.glyph_transform, None);
