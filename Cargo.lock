@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "debug_timer",
  "futures-channel",
@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello-cpu"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "debug_timer",
  "kurbo",

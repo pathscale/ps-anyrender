@@ -45,8 +45,8 @@ rust-version = "1.88.0"
 anyrender = { package = "ps-anyrender", version = "0.13.0", path = "./crates/anyrender" }
 anyrender_serialize = { version = "0.6.0", path = "./crates/anyrender_serialize" }
 anyrender_skia = { version = "0.10.0", path = "./crates/anyrender_skia" }
-anyrender_vello = { package = "ps-anyrender-vello", version = "0.13.1", path = "./crates/anyrender_vello" }
-anyrender_vello_cpu = { package = "ps-anyrender-vello-cpu", version = "0.16.0", path = "./crates/anyrender_vello_cpu" }
+anyrender_vello = { package = "ps-anyrender-vello", version = "0.14.0", path = "./crates/anyrender_vello" }
+anyrender_vello_cpu = { package = "ps-anyrender-vello-cpu", version = "0.17.0", path = "./crates/anyrender_vello_cpu" }
 anyrender_vello_hybrid = { package = "ps-anyrender-vello-hybrid", version = "0.10.0", path = "./crates/anyrender_vello_hybrid" }
 anyrender_svg = { package = "ps-anyrender-svg", version = "0.15.0", path = "./crates/anyrender_svg" }
 wgpu_context = { package = "ps-wgpu-context", version = "0.8.0", path = "./crates/wgpu_context" }
