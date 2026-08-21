@@ -4,7 +4,10 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      # `master`, this repository's default branch. It said `main`, inherited
+      # from upstream, so push CI never ran here and the cache below was never
+      # saved.
+      - master
   # For `check-wasm-hybrid`, which is manual on purpose. See its comment.
   workflow_dispatch:
 
@@ -102,7 +105,7 @@ jobs:
         with:
           key: "wasm32-unknown-unknown"
           cache-all-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - run: cargo clippy -p ps-anyrender --target wasm32-unknown-unknown -- -D warnings
       - run: cargo clippy -p ps-anyrender-vello --target wasm32-unknown-unknown -- -D warnings
       # `--manifest-path`, not `-p`: the crate is outside the workspace, so
@@ -152,7 +155,7 @@ jobs:
         with:
           key: "${{ matrix.platform.target }}"
           cache-all-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
           cache-bin: ${{ matrix.os != 'macos-latest' }} # works around https://github.com/Swatinem/rust-cache/issues/341
 
       - name: Install development libraries on ubuntu
