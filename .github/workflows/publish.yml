@@ -55,11 +55,17 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          # `ps-anyrender-vello-hybrid` is absent on purpose. It is excluded
+          # from `[workspace] members` until it is ported to ps-vello 0.2, and
+          # `cargo publish -p` resolves against the workspace, so naming it here
+          # failed the whole run with "package ID specification
+          # `ps-anyrender-vello-hybrid` did not match any packages" before it
+          # reached any crate that could actually be published. Put it back in
+          # the same commit that puts it back in `members`.
           crates=(
             ps-anyrender
             ps-anyrender-vello
             ps-anyrender-vello-cpu
-            ps-anyrender-vello-hybrid
             ps-anyrender-svg
           )
           for crate in "${crates[@]}"; do
