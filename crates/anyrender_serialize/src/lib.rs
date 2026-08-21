@@ -9,6 +9,20 @@
 //! - `images/<sha256_hash>.png` - Image files (PNG format)
 //! - `fonts/<sha256_hash>.{woff2,ttf}` - Font data files (optionally WOFF2-compressed and subsetted)
 
+// `chunks_exact_to_as_chunks` is new in clippy 1.98 and suggests
+// `as_chunks_mut::<4>()` for the RGBA/BGRA channel swaps below. Not taken: this
+// workspace builds on an MSRV of 1.92, where that method does not exist, so the
+// suggestion trades a lint for a broken MSRV job. Crate-level rather than
+// per-site: the swap appears in more than one conversion function and a missed
+// one fails the whole `-D warnings` run. Revisit when the MSRV passes the
+// version that stabilised it.
+//
+// `unknown_lints` goes with it because the lint does not exist before 1.98, so
+// on an older toolchain the allow is itself a warning, which `-D warnings` then
+// turns into exactly the failure it was meant to prevent.
+#![allow(unknown_lints)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 
