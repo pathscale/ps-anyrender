@@ -1,5 +1,14 @@
 //! A [`vello`] backend for the [`anyrender`] 2D drawing abstraction
 
+// `chunks_exact_to_as_chunks` is new in clippy 1.98 and suggests
+// `as_chunks_mut::<4>()` where `blur.rs` packs its uniform words. Not taken:
+// this workspace builds on an MSRV of 1.92, where that method does not exist,
+// so the suggestion trades a lint for a broken MSRV job. `unknown_lints` goes
+// with it because the lint does not exist before 1.98, and there the allow is
+// itself a warning that `-D warnings` turns into a failure.
+#![allow(unknown_lints)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 mod backdrop;
 mod blur;
 #[cfg(not(target_arch = "wasm32"))]
