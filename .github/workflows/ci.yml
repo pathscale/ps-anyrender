@@ -120,21 +120,24 @@ jobs:
     env:
       RUST_CARGO_COMMAND: ${{ matrix.platform.cross == true && 'cross' || 'cargo' }}
     strategy:
+      # Linux always; Windows and macOS only when dispatched by hand.
+      #
+      # Selected before the matrix expands, because a job-level `if` cannot read
+      # the `matrix` context: it is evaluated first, so gating entries that way
+      # silently keeps running them. `fromJSON` over two literal lists is the
+      # form that actually works.
+      #
+      # Linux carries `--all-features`, the widest of the three, so it is the
+      # entry that gates a change. Windows and macOS are paid runners answering
+      # a question Linux already answers for the same code, and macOS is tested
+      # locally on the machine this is developed on. Kept rather than deleted:
+      # the day a platform-specific failure appears, the entry that reproduces
+      # it should already exist rather than be reconstructed from memory. Run
+      # them from the Actions tab with "Run workflow".
       matrix:
-        platform:
-          # Windows and macOS test entries are deliberately absent: the paid
-          # runners are not worth it when Linux validates the same code and
-          # macOS is tested locally on the machine this is developed on. The
-          # linux entry below already carries --all-features, which is the
-          # widest of the three, so no feature coverage is lost with them.
-          - {
-              name: linux,
-              target: x86_64-unknown-linux-gnu,
-              os: ubicloud-standard-8,
-              cross: false,
-              command: "test",
-              args: "--all --tests --all-features",
-            }
+        platform: ${{ fromJSON(github.event_name == 'workflow_dispatch'
+          && '[{"name":"linux","target":"x86_64-unknown-linux-gnu","os":"ubicloud-standard-8","cross":false,"command":"test","args":"--all --tests --all-features"},{"name":"windows","target":"x86_64-pc-windows-msvc","os":"windows-latest","cross":false,"command":"test","args":"--all --tests"},{"name":"macos","target":"aarch64-apple-darwin","os":"macos-latest","cross":false,"command":"test","args":"--all --tests"}]'
+          || '[{"name":"linux","target":"x86_64-unknown-linux-gnu","os":"ubicloud-standard-8","cross":false,"command":"test","args":"--all --tests --all-features"}]') }}
 
     name: Test (${{ matrix.platform.name }})
 
@@ -156,7 +159,11 @@ jobs:
           key: "${{ matrix.platform.target }}"
           cache-all-crates: "true"
           save-if: ${{ github.ref == 'refs/heads/master' }}
-          cache-bin: ${{ matrix.os != 'macos-latest' }} # works around https://github.com/Swatinem/rust-cache/issues/341
+          # `matrix.platform.os`, not `matrix.os`: the entries live under
+          # `platform`, so the old spelling was always undefined and the
+          # workaround never applied. It did not matter while macOS could not
+          # run; it does now that dispatching the workflow includes it.
+          cache-bin: ${{ matrix.platform.os != 'macos-latest' }} # works around https://github.com/Swatinem/rust-cache/issues/341
 
       - name: Install development libraries on ubuntu
         if: ${{ matrix.platform.os == 'ubicloud-standard-8' }}
