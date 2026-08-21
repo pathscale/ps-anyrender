@@ -121,7 +121,6 @@ version = "0.10.0"
 dependencies = [
  "ash",
  "ash-window",
- "debug_timer",
  "gl",
  "glutin",
  "hashbrown 0.17.1",
@@ -136,6 +135,7 @@ dependencies = [
  "peniko",
  "pixels_window_renderer",
  "ps-anyrender",
+ "ps-debug-timer",
  "raw-window-handle",
  "skia-safe",
  "softbuffer_window_renderer",
@@ -612,12 +612,6 @@ name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
-
-[[package]]
-name = "debug_timer"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da220af51a1a335e9a930beaaef53d261e41ea9eecfb3d973a3ddae1a7284b9c"
 
 [[package]]
 name = "derive_arbitrary"
@@ -1943,9 +1937,9 @@ dependencies = [
 name = "pixels_window_renderer"
 version = "0.7.0"
 dependencies = [
- "debug_timer",
  "pixels",
  "ps-anyrender",
+ "ps-debug-timer",
 ]
 
 [[package]]
@@ -2072,14 +2066,14 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
- "debug_timer",
  "futures-channel",
  "kurbo",
  "peniko",
  "pollster",
  "ps-anyrender",
+ "ps-debug-timer",
  "ps-vello",
  "ps-wgpu-context",
  "rustc-hash 2.1.2",
@@ -2089,18 +2083,24 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello-cpu"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
- "debug_timer",
  "kurbo",
  "peniko",
  "pixels_window_renderer",
  "ps-anyrender",
+ "ps-debug-timer",
  "ps-glifo",
  "ps-vello-common",
  "ps-vello-cpu",
  "softbuffer_window_renderer",
 ]
+
+[[package]]
+name = "ps-debug-timer"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2387c1a4325992b45f525d6e940321efef1589962806eef948ad5660388d33d"
 
 [[package]]
 name = "ps-glifo"
@@ -2695,10 +2695,10 @@ dependencies = [
 name = "softbuffer_window_renderer"
 version = "0.7.0"
 dependencies = [
- "debug_timer",
  "kurbo",
  "peniko",
  "ps-anyrender",
+ "ps-debug-timer",
  "softbuffer",
 ]
 

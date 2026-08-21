@@ -1,7 +1,7 @@
 [package]
 name = "ps-anyrender-vello"
 description = "Vello backend for anyrender"
-version = "0.14.0"
+version = "0.14.1"
 documentation = "https://docs.rs/ps-anyrender-vello"
 homepage.workspace = true
 repository.workspace = true
