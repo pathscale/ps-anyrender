@@ -24,7 +24,7 @@
 //! `ps-blitz`'s `glass_pass_count.rs` and runs everywhere.
 
 use anyrender::{
-    PaintScene,
+    ImageRenderer, PaintScene,
     filters::{Filter, FilterEffect},
     render_to_buffer,
 };
@@ -292,4 +292,131 @@ fn the_blur_stays_inside_the_element() {
         [255, 255, 255],
         "right of the panel is untouched white"
     );
+}
+
+/// A reused renderer whose frames want different numbers of boundaries.
+///
+/// Every test above builds a fresh renderer, so the pool always starts empty
+/// and always has room. The application does not: one renderer draws every
+/// frame, `end_frame` trims the pool to the high water mark of the frame that
+/// just finished, and the next frame may want more boundaries than that.
+///
+/// What this pins down is that growing the boundary count across frames on one
+/// renderer still draws every segment -- the pool grows back, the snapshots
+/// are re-registered, and no band comes out flat.
+///
+/// It is worth being explicit about what it does *not* show. It passes with or
+/// without the missing-slot fallback in `backdrop::execute`, because
+/// `scene.rs` reserves each boundary before pushing it and so the slot is
+/// always there by composite time. That was checked by reverting the fallback
+/// and re-running: still green. So this is a regression test for pool reuse,
+/// not evidence that a segment was ever dropped.
+#[test]
+fn a_reused_renderer_draws_every_segment_as_boundaries_grow() {
+    if !require_gpu("a_reused_renderer_draws_every_segment_as_boundaries_grow") {
+        return;
+    }
+
+    let mut renderer = VelloImageRenderer::new(WIDTH, HEIGHT);
+
+    // Frame one: a single filtered panel, so the pool is sized for one
+    // boundary and `end_frame` trims it to exactly that.
+    let mut first = Vec::new();
+    renderer.render_to_vec(
+        |scene| {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::BLACK,
+                None,
+                &Rect::new(0.0, 0.0, SEAM as f64, HEIGHT as f64),
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &Rect::new(SEAM as f64, 0.0, WIDTH as f64, HEIGHT as f64),
+            );
+            let panel = Rect::new(40.0, 0.0, 160.0, 40.0);
+            scene.push_layer(
+                Mix::Normal,
+                1.0,
+                Affine::IDENTITY,
+                &panel,
+                None,
+                Some(Arc::new(Filter::single(FilterEffect::blur(8.0)))),
+            );
+            scene.pop_layer();
+        },
+        &mut first,
+    );
+
+    // Then a long run of frames with no backdrop at all. The pool only
+    // releases after a sustained idle streak (a little over a second at
+    // 120Hz), so a couple of quiet frames is not enough to reach the trim;
+    // this is what a window sitting still during startup does.
+    for _ in 0..200 {
+        let mut idle = Vec::new();
+        renderer.render_to_vec(
+            |scene| {
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::BLACK,
+                    None,
+                    &Rect::new(0.0, 0.0, WIDTH as f64, HEIGHT as f64),
+                );
+            },
+            &mut idle,
+        );
+    }
+
+    // Frame two: two filtered panels through the same renderer. Both
+    // boundaries now need slots the trim gave back.
+    let mut second = Vec::new();
+    renderer.render_to_vec(
+        |scene| {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::BLACK,
+                None,
+                &Rect::new(0.0, 0.0, SEAM as f64, HEIGHT as f64),
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &Rect::new(SEAM as f64, 0.0, WIDTH as f64, HEIGHT as f64),
+            );
+            for band in [(0.0, 40.0), (60.0, 100.0)] {
+                let panel = Rect::new(40.0, band.0, 160.0, band.1);
+                scene.push_layer(
+                    Mix::Normal,
+                    1.0,
+                    Affine::IDENTITY,
+                    &panel,
+                    None,
+                    Some(Arc::new(Filter::single(FilterEffect::blur(8.0)))),
+                );
+                scene.pop_layer();
+            }
+        },
+        &mut second,
+    );
+
+    // The seam itself is the evidence. A dropped segment leaves the base black
+    // and white unwritten in that band, so both sides read as one flat colour;
+    // a rendered one keeps the halves apart whether or not it blurred.
+    for y in [20, 80] {
+        let left = pixel(&second, 8, y);
+        let right = pixel(&second, 190, y);
+        assert_ne!(
+            left, right,
+            "the band at y={y} came back flat ({left:?} on both sides), so its \
+             segment was never rendered into the frame",
+        );
+    }
 }

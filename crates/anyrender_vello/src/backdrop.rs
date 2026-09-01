@@ -365,7 +365,31 @@ pub(crate) fn execute(
     let mut previous: Option<&SegmentBoundary> = None;
 
     for (scene, boundary) in segments.scenes.iter().zip(&segments.boundaries) {
-        let Some(target) = pool.snapshot_view(boundary.snapshot).cloned() else {
+        /*
+         * Every boundary reaching here should have a slot: `scene.rs` calls
+         * `pool.reserve` for a boundary index immediately before pushing the
+         * `SegmentBoundary` that carries it, `reserve` allocates through
+         * `ensure`, and `end_frame` does not trim until after this runs. No
+         * route through the public API was found that breaks that.
+         *
+         * The arm is kept anyway, because the two ways of being wrong here are
+         * not equally bad. Skipping the segment -- which is what a bare
+         * `continue` does -- leaves the final composite reading a snapshot
+         * texture nothing wrote, so the window comes up blank or half drawn
+         * with no panic and nothing in the log. Rendering it unblurred instead
+         * is visibly wrong in a way somebody reports. The `debug_assert` is
+         * what actually surfaces the invariant break to a developer; the
+         * fallback is only there so a release build degrades legibly.
+         */
+        let slot = pool.snapshot_view(boundary.snapshot).cloned();
+        debug_assert!(
+            slot.is_some(),
+            "boundary {} has no snapshot slot; scene.rs is expected to reserve \
+             every boundary it pushes",
+            boundary.snapshot,
+        );
+        let Some(target) = slot else {
+            renderer.render_to_texture(device, queue, scene, final_target, params)?;
             continue;
         };
         if let Some(previous) = previous {
@@ -518,6 +542,99 @@ fn release_decision(oversized: bool, idle_frames: u32) -> Release {
         Release::Keep { idle_frames }
     } else {
         Release::Now
+    }
+}
+
+/// The pool's high water bookkeeping.
+///
+/// These describe what `end_frame`'s trim is entitled to do, and nothing more.
+/// They deliberately do **not** establish that `execute` can meet a boundary
+/// with no slot: `note_boundary` below reproduces only the bookkeeping half of
+/// `reserve` and omits the `ensure` call that allocates. Reading a bug out of
+/// these would be reading it out of the half of the function that cannot
+/// allocate.
+///
+/// As far as could be determined, `execute` never sees a missing slot --
+/// `scene.rs` reserves each boundary index immediately before pushing the
+/// boundary, and the trim runs afterwards. The fallback in `execute` is
+/// defence in depth against that invariant being broken later, not a fix for
+/// an observed failure, and it is guarded by a `debug_assert` that would fire
+/// first.
+#[cfg(test)]
+mod missing_slot_tests {
+    use super::BackdropPool;
+
+    /// Drive the high water bookkeeping the way a frame does, without the GPU
+    /// allocation `reserve` would perform. This is the half of `reserve` that
+    /// decides whether a slot survives `end_frame`.
+    fn note_boundary(pool: &mut BackdropPool, boundary: usize) {
+        pool.frame_snapshot_high_water = Some(
+            pool.frame_snapshot_high_water
+                .map_or(boundary, |high| high.max(boundary)),
+        );
+    }
+
+    /// A frame that wants no backdrops at all reports no high water mark, and
+    /// the next `end_frame` is then entitled to trim every snapshot slot.
+    ///
+    /// This is a claim about the trim, not about `execute`. The frame that
+    /// puts a `backdrop-filter` back on screen calls `reserve` before it
+    /// pushes the boundary, and `reserve` reallocates the slot, so a trimmed
+    /// pool is refilled before the lookup happens.
+    #[test]
+    fn a_frame_with_no_backdrops_lets_the_pool_be_trimmed_to_nothing() {
+        let mut pool = BackdropPool::default();
+        note_boundary(&mut pool, 0);
+        assert_eq!(
+            pool.frame_snapshot_high_water.map_or(0, |high| high + 1),
+            1,
+            "a frame that reserved boundary 0 wants one slot",
+        );
+
+        pool.frame_snapshot_high_water = None;
+        assert_eq!(
+            pool.frame_snapshot_high_water.map_or(0, |high| high + 1),
+            0,
+            "a frame that reserved nothing lets end_frame trim to zero, so the \
+             next frame that wants boundary 0 finds no slot",
+        );
+    }
+
+    /// The pool is sized to the previous frame's high water mark, so a frame
+    /// wanting more boundaries than the last one starts out short of slots.
+    ///
+    /// Again a claim about sizing only: `reserve` grows the pool for each new
+    /// boundary as the scene is built, so being short at the start of a frame
+    /// is not being short at composite time.
+    #[test]
+    fn a_frame_wanting_more_boundaries_outruns_the_trimmed_pool() {
+        let mut pool = BackdropPool::default();
+        note_boundary(&mut pool, 0);
+        let sized_for = pool.frame_snapshot_high_water.map_or(0, |high| high + 1);
+
+        pool.frame_snapshot_high_water = None;
+        note_boundary(&mut pool, 0);
+        note_boundary(&mut pool, 1);
+        let wanted = pool.frame_snapshot_high_water.map_or(0, |high| high + 1);
+
+        assert!(
+            wanted > sized_for,
+            "a frame wanting boundaries 0 and 1 needs {wanted} slots but the \
+             pool was left sized for {sized_for}, so reserve has to grow it",
+        );
+    }
+
+    /// `snapshot_view` is the lookup `execute` performs. On an empty pool it
+    /// returns `None` rather than panicking, which is what lets `execute`
+    /// handle the case at all.
+    #[test]
+    fn snapshot_view_reports_a_missing_slot_rather_than_panicking() {
+        let pool = BackdropPool::default();
+        assert!(
+            pool.snapshot_view(0).is_none(),
+            "an empty pool has no slot 0, and the lookup has to say so rather \
+             than index out of bounds",
+        );
     }
 }
 
