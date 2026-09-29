@@ -8,18 +8,29 @@
 # from inside the repository, because a path dependency resolves against the
 # working tree and always compiles.
 #
-# Triggered by hand rather than on push to master. Publishing is irreversible -
-# a version can never be reused - so it should be a decision, not a side effect
-# of merging. `dry_run` is the default for exactly that reason.
+# A version bump is the release trigger, as in ps-blitz. Publishing only by
+# hand repeated that failure one level up: 0.14.2 merged and nothing
+# published it. Every crate whose version is already on crates.io is skipped
+# below, so a push that bumps nothing uploads nothing. A manual run defaults to
+# a dry run.
 name: Publish
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - Cargo.toml
+      - crates/**
+      - .github/workflows/publish.yml
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Package and verify without uploading"
         type: boolean
         default: true
+
+permissions:
+  contents: read
 
 concurrency:
   group: publish
