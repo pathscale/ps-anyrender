@@ -376,10 +376,14 @@ pub(crate) fn execute(
          * not equally bad. Skipping the segment -- which is what a bare
          * `continue` does -- leaves the final composite reading a snapshot
          * texture nothing wrote, so the window comes up blank or half drawn
-         * with no panic and nothing in the log. Rendering it unblurred instead
-         * is visibly wrong in a way somebody reports. The `debug_assert` is
-         * what actually surfaces the invariant break to a developer; the
-         * fallback is only there so a release build degrades legibly.
+         * with no panic and nothing in the log. The `debug_assert` is what
+         * surfaces the invariant break to a developer. If it breaks in a
+         * release build, this segment already holds everything painted up to
+         * the boundary, so it is rendered unblurred to the final target and the
+         * frame ends there: a later segment or the final scene would clear that
+         * target, so continuing would pay for a pass whose result is thrown
+         * away. The frame is visibly wrong from this panel on, which is what
+         * gets reported, and it is never blank.
          */
         let slot = pool.snapshot_view(boundary.snapshot).cloned();
         debug_assert!(
@@ -389,8 +393,11 @@ pub(crate) fn execute(
             boundary.snapshot,
         );
         let Some(target) = slot else {
+            if let Some(previous) = previous {
+                pool.mark_boundary_dirty(renderer, previous);
+            }
             renderer.render_to_texture(device, queue, scene, final_target, params)?;
-            continue;
+            return Ok(());
         };
         if let Some(previous) = previous {
             pool.mark_boundary_dirty(renderer, previous);
