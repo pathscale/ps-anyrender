@@ -704,3 +704,85 @@ mod release_tests {
         );
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod pool_trim_tests {
+    use super::{BackdropPool, IDLE_FRAMES_BEFORE_RELEASE};
+    use rustc_hash::FxHashMap;
+    use vello::{Renderer as VelloRenderer, RendererOptions};
+    use wgpu::TextureUsages;
+    use wgpu_context::{BufferRendererConfig, WGPUContext};
+
+    /// Exercise the real trim without rendering idle frames through vello.
+    #[test]
+    fn end_frame_trims_unused_slots_after_the_idle_threshold() {
+        let mut context = WGPUContext::new();
+        let buffer_renderer =
+            match pollster::block_on(context.create_buffer_renderer(BufferRendererConfig {
+                width: 16,
+                height: 16,
+                usage: TextureUsages::STORAGE_BINDING,
+            })) {
+                Ok(buffer_renderer) => buffer_renderer,
+                Err(error) => {
+                    eprintln!(
+                        "end_frame_trims_unused_slots_after_the_idle_threshold: \
+                         {error:?}. Skipped."
+                    );
+                    return;
+                }
+            };
+        let mut renderer = VelloRenderer::new(
+            buffer_renderer.device(),
+            RendererOptions {
+                use_cpu: false,
+                num_init_threads: crate::DEFAULT_THREADS,
+                antialiasing_support: vello::AaSupport::area_only(),
+                pipeline_cache: None,
+            },
+        )
+        .expect("Got non-Send/Sync error from creating renderer");
+
+        let mut pool = BackdropPool::default();
+        let mut handles = FxHashMap::default();
+        pool.reserve(
+            buffer_renderer.device(),
+            &mut renderer,
+            &mut handles,
+            0,
+            0,
+            (16, 16),
+            (8, 8),
+        );
+        assert_eq!(
+            (pool.snapshots.len(), pool.blurred.len(), pool.scratch.len()),
+            (1, 1, 1),
+        );
+        assert_eq!(handles.len(), 2);
+
+        // Finish the frame that used the slots, then advance only the pool's
+        // frame counter until the release threshold is reached.
+        pool.end_frame(&mut renderer, &mut handles);
+        for _ in 0..(IDLE_FRAMES_BEFORE_RELEASE - 1) {
+            pool.end_frame(&mut renderer, &mut handles);
+        }
+
+        assert_eq!(pool.idle_frames, IDLE_FRAMES_BEFORE_RELEASE - 1);
+        assert_eq!(
+            (pool.snapshots.len(), pool.blurred.len(), pool.scratch.len()),
+            (1, 1, 1),
+            "the pool must retain slots before the idle threshold",
+        );
+        assert_eq!(handles.len(), 2);
+
+        pool.end_frame(&mut renderer, &mut handles);
+
+        assert_eq!(
+            (pool.snapshots.len(), pool.blurred.len(), pool.scratch.len()),
+            (0, 0, 0),
+            "the pool must trim every unused slot at the idle threshold",
+        );
+        assert!(handles.is_empty());
+        assert_eq!(pool.idle_frames, 0);
+    }
+}
