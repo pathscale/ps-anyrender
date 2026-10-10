@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyrender::{Filter, NormalizedCoord, Paint, PaintRef, PaintScene, RenderContext};
 use glifo::FontEmbolden;
@@ -6,19 +6,35 @@ use kurbo::{Affine, BezPath, Diagonal2, Rect, Shape, Stroke};
 use peniko::{BlendMode, Color, Fill, FontData, ImageBrush, StyleRef};
 use vello_cpu::{ImageSource, PaintType, Pixmap};
 
+use crate::ImageCache;
+
 const DEFAULT_TOLERANCE: f64 = 0.1;
 
-fn anyrender_paint_to_vello_cpu_paint<'a>(paint: PaintRef<'a>) -> PaintType {
+fn anyrender_paint_to_vello_cpu_paint<'a>(
+    paint: PaintRef<'a>,
+    cache: Option<&Arc<Mutex<ImageCache>>>,
+) -> PaintType {
     match paint {
         Paint::Solid(alpha_color) => PaintType::Solid(alpha_color),
         Paint::Gradient(gradient) => PaintType::Gradient(gradient.clone()),
-        Paint::Image(image) => PaintType::Image(ImageBrush {
-            #[cfg(not(feature = "experimental_image_cache"))]
-            image: ImageSource::from_peniko_image_data(image.image),
-            #[cfg(feature = "experimental_image_cache")]
-            image: convert_image_cached(image.image),
-            sampler: image.sampler,
-        }),
+        Paint::Image(image) => {
+            let converted = if let Some(cache) = cache {
+                cache
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .convert(image.image)
+            } else {
+                #[cfg(not(feature = "experimental_image_cache"))]
+                let converted = ImageSource::from_peniko_image_data(image.image);
+                #[cfg(feature = "experimental_image_cache")]
+                let converted = convert_image_cached(image.image);
+                converted
+            };
+            PaintType::Image(ImageBrush {
+                image: converted,
+                sampler: image.sampler,
+            })
+        }
         // TODO: custom paint
         Paint::Resource(_) => PaintType::Solid(peniko::color::palette::css::TRANSPARENT),
         Paint::Custom(_) => PaintType::Solid(peniko::color::palette::css::TRANSPARENT),
@@ -57,6 +73,7 @@ struct OpenLayer {
 pub struct VelloCpuScenePainter {
     pub render_ctx: vello_cpu::RenderContext,
     pub resources: vello_cpu::Resources,
+    image_cache: Option<Arc<Mutex<ImageCache>>>,
     /// The layers open on `render_ctx` right now, outermost first.
     ///
     /// A backdrop snapshot is only legal at depth zero: `render_to_pixmap`
@@ -79,8 +96,18 @@ impl VelloCpuScenePainter {
         Self {
             render_ctx: vello_cpu::RenderContext::new(width, height),
             resources: vello_cpu::Resources::new(),
+            image_cache: None,
             layers: Vec::new(),
         }
+    }
+
+    /// Share a bounded image conversion cache across painters and frames.
+    ///
+    /// Without this opt-in, the existing experimental feature retains its
+    /// original behavior.
+    pub fn with_image_cache(mut self, cache: Arc<Mutex<ImageCache>>) -> Self {
+        self.image_cache = Some(cache);
+        self
     }
 
     /// How many layers are open. Was a public field; kept as a reader because
@@ -130,7 +157,7 @@ impl VelloCpuScenePainter {
     /// Draw the scene so far back over itself, filtered, inside `clip`.
     ///
     /// This is `backdrop-filter`. A layer filter runs over the layer's *own*
-    /// content, so it can never express "blur what is behind me" — the input
+    /// content, so it can never express "blur what is behind me": the input
     /// for that is `FilterSource::BackgroundImage`, which vello declares and
     /// implements nowhere. Rather than wait for it, take the backdrop the only
     /// way it is actually available: render what has been drawn up to this
@@ -289,7 +316,10 @@ impl PaintScene for VelloCpuScenePainter {
         self.render_ctx.set_transform(transform);
         self.render_ctx.set_stroke(style.clone());
         self.render_ctx
-            .set_paint(anyrender_paint_to_vello_cpu_paint(paint.into()));
+            .set_paint(anyrender_paint_to_vello_cpu_paint(
+                paint.into(),
+                self.image_cache.as_ref(),
+            ));
         self.render_ctx
             .set_paint_transform(brush_transform.unwrap_or(Affine::IDENTITY));
         self.render_ctx
@@ -307,7 +337,10 @@ impl PaintScene for VelloCpuScenePainter {
         self.render_ctx.set_transform(transform);
         self.render_ctx.set_fill_rule(style);
         self.render_ctx
-            .set_paint(anyrender_paint_to_vello_cpu_paint(paint.into()));
+            .set_paint(anyrender_paint_to_vello_cpu_paint(
+                paint.into(),
+                self.image_cache.as_ref(),
+            ));
         self.render_ctx
             .set_paint_transform(brush_transform.unwrap_or(Affine::IDENTITY));
         self.render_ctx
@@ -330,7 +363,10 @@ impl PaintScene for VelloCpuScenePainter {
     ) {
         self.render_ctx.set_transform(transform);
         self.render_ctx
-            .set_paint(anyrender_paint_to_vello_cpu_paint(paint.into()));
+            .set_paint(anyrender_paint_to_vello_cpu_paint(
+                paint.into(),
+                self.image_cache.as_ref(),
+            ));
 
         let style: StyleRef<'a> = style.into();
         match style {
