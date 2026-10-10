@@ -3,6 +3,7 @@
 
 mod image_cache;
 mod image_renderer;
+mod pixmap;
 mod scene;
 mod window_renderer;
 
@@ -11,6 +12,7 @@ mod filters;
 
 pub use image_cache::ImageCache;
 pub use image_renderer::VelloCpuImageRenderer;
+pub use pixmap::CpuPixmap;
 pub use scene::VelloCpuScenePainter;
 
 #[cfg(any(
