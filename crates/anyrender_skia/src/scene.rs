@@ -52,6 +52,8 @@ impl SkiaSceneCache {
         self.normalized_typeface.next_gen();
         self.image_shader.next_gen();
         self.font.next_gen();
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        self.extracted_font_data.next_gen();
     }
 }
 
@@ -592,23 +594,57 @@ fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
+const MAX_FILTER_NODES: usize = 256;
+
 fn convert_filter(filter: &Filter) -> Option<ImageFilter> {
-    convert_filter_effect(filter, filter.output())
+    let nodes = filter.nodes();
+    if nodes.is_empty() || nodes.len() > MAX_FILTER_NODES {
+        return None;
+    }
+    let output = usize::from(filter.output().0);
+    nodes.get(output)?;
+
+    // Validate the complete graph before constructing any Skia filters.
+    for (index, node) in nodes.iter().enumerate() {
+        for input in [&node.inputs.primary, &node.inputs.secondary] {
+            if let Some(FilterInput::Result(input_id)) = input
+                && usize::from(input_id.0) >= index
+            {
+                return None;
+            }
+        }
+    }
+
+    let mut converted = Vec::with_capacity(nodes.len());
+    for index in 0..nodes.len() {
+        let id = FilterId(u16::try_from(index).ok()?);
+        converted.push(convert_filter_effect(filter, id, &converted));
+    }
+    converted.get(output)?.clone()
 }
 
-fn resolve_input(filter: &Filter, input: &Option<FilterInput>) -> Option<ImageFilter> {
-    input.as_ref().and_then(|input| match input {
-        FilterInput::Source(_) => None,
-        FilterInput::Result(input_id) => convert_filter_effect(filter, *input_id),
-    })
+fn resolve_input(
+    converted: &[Option<ImageFilter>],
+    input: &Option<FilterInput>,
+) -> Option<ImageFilter> {
+    match input {
+        Some(FilterInput::Result(input_id)) => {
+            converted.get(usize::from(input_id.0)).cloned().flatten()
+        }
+        Some(FilterInput::Source(_)) | None => None,
+    }
 }
 
-fn convert_filter_effect(filter: &Filter, id: FilterId) -> Option<ImageFilter> {
-    let node = &filter.nodes()[id.0 as usize];
-    let input = resolve_input(filter, &node.inputs.primary);
+fn convert_filter_effect(
+    filter: &Filter,
+    id: FilterId,
+    converted: &[Option<ImageFilter>],
+) -> Option<ImageFilter> {
+    let node = filter.nodes().get(usize::from(id.0))?;
+    let input = resolve_input(converted, &node.inputs.primary);
     // Secondary input ("in2" in SVG), used by filters that combine two inputs such as
     // composite, blend and displacement map.
-    let secondary = resolve_input(filter, &node.inputs.secondary);
+    let secondary = resolve_input(converted, &node.inputs.secondary);
 
     // Clone to avoid borrow checking issues. Cloning is cheap as filters are refcounted.
     let input_clone = input.clone();
@@ -753,7 +789,14 @@ fn convert_filter_effect(filter: &Filter, id: FilterId) -> Option<ImageFilter> {
             }
         }
         FilterEffect::ConvolveMatrix(convolution_kernel) => {
-            let size = convolution_kernel.size as i32;
+            let size = i32::try_from(convolution_kernel.size).ok()?;
+            if size <= 0 {
+                return None;
+            }
+            let kernel_len = usize::try_from(size.checked_mul(size)?).ok()?;
+            if convolution_kernel.values.len() != kernel_len {
+                return None;
+            }
             // Skia applies `gain` as a multiplier, so invert the divisor.
             let gain = if convolution_kernel.divisor != 0.0 {
                 1.0 / convolution_kernel.divisor
@@ -946,9 +989,19 @@ mod sk_peniko {
         brush_transform: Option<kurbo::Affine>,
     ) -> Option<SkShader> {
         let image_data = image_brush.image;
+        let width = i32::try_from(image_data.width).ok()?;
+        let height = i32::try_from(image_data.height).ok()?;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        let row_bytes = usize::try_from(image_data.width).ok()?.checked_mul(4)?;
+        let required_bytes = row_bytes.checked_mul(usize::try_from(image_data.height).ok()?)?;
+        if image_data.data.data().len() < required_bytes {
+            return None;
+        }
 
         let image_info = SkImageInfo::new(
-            (image_data.width as i32, image_data.height as i32),
+            (width, height),
             match image_data.format {
                 ImageFormat::Rgba8 => SkColorType::RGBA8888,
                 ImageFormat::Bgra8 => SkColorType::BGRA8888,
@@ -963,9 +1016,7 @@ mod sk_peniko {
         let pixels = unsafe {
             SkData::new_bytes(image_data.data.data()) // We have to ensure the src image data lives long enough
         };
-        let image =
-            skia_safe::images::raster_from_data(&image_info, pixels, image_info.min_row_bytes())
-                .unwrap();
+        let image = skia_safe::images::raster_from_data(&image_info, pixels, row_bytes)?;
 
         let sampling = match image_brush.sampler.quality {
             peniko::ImageQuality::Low => {

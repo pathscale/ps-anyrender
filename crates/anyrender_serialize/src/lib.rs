@@ -24,10 +24,10 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 use anyrender::Paint;
-use image::{ImageBuffer, ImageEncoder, RgbaImage};
+use image::{ImageBuffer, ImageDecoder, ImageEncoder, RgbaImage};
 use peniko::{Blob, Color, FontData, Gradient, ImageAlphaType, ImageBrush, ImageData, ImageFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -356,6 +356,34 @@ fn hex_encode(bytes: &[u8]) -> String {
     hex
 }
 
+const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_COMMAND_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_READ_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 16_384;
+const MAX_ARCHIVE_RESOURCES: usize = 4096;
+
+fn read_archive_entry<R: Read>(
+    reader: R,
+    limit: u64,
+    remaining: &mut u64,
+) -> Result<Vec<u8>, ArchiveError> {
+    let limit = limit.min(*remaining);
+    let mut bytes = Vec::new();
+    reader.take(limit + 1).read_to_end(&mut bytes)?;
+    let length = u64::try_from(bytes.len())
+        .map_err(|_| ArchiveError::InvalidFormat("Archive entry length overflow".to_string()))?;
+    if length > limit {
+        return Err(ArchiveError::InvalidFormat(
+            "Archive entry exceeds its byte limit".to_string(),
+        ));
+    }
+    *remaining -= length;
+    Ok(bytes)
+}
+
 fn encode_rgba_to_png(rgba_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ArchiveError> {
     let img: RgbaImage = ImageBuffer::from_raw(width, height, rgba_data.to_vec())
         .ok_or_else(|| ArchiveError::InvalidFormat("Failed to create image buffer".to_string()))?;
@@ -367,9 +395,51 @@ fn encode_rgba_to_png(rgba_data: &[u8], width: u32, height: u32) -> Result<Vec<u
     Ok(png_data)
 }
 
-fn decode_png_to_rgba(png_data: &[u8]) -> Result<Vec<u8>, ArchiveError> {
-    let img = image::load_from_memory_with_format(png_data, image::ImageFormat::Png)?;
-    Ok(img.into_rgba8().into_raw())
+fn decode_png_to_rgba(
+    png_data: &[u8],
+    expected_dimensions: (u32, u32),
+    remaining: &mut u64,
+) -> Result<(Vec<u8>, u32, u32), ArchiveError> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_BYTES);
+
+    let decoder = image::codecs::png::PngDecoder::with_limits(Cursor::new(png_data), limits)?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 || (width, height) != expected_dimensions {
+        return Err(ArchiveError::InvalidFormat(
+            "PNG dimensions do not match the manifest".to_string(),
+        ));
+    }
+
+    let rgba_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| ArchiveError::InvalidFormat("PNG dimensions overflow".to_string()))?;
+    if rgba_bytes > MAX_IMAGE_BYTES
+        || rgba_bytes > *remaining
+        || decoder.total_bytes() > MAX_IMAGE_BYTES
+    {
+        return Err(ArchiveError::InvalidFormat(
+            "Decoded PNG exceeds its byte limit".to_string(),
+        ));
+    }
+
+    let img = image::DynamicImage::from_decoder(decoder)?.into_rgba8();
+    if img.dimensions() != (width, height) {
+        return Err(ArchiveError::InvalidFormat(
+            "Decoded PNG dimensions changed".to_string(),
+        ));
+    }
+    let rgba_data = img.into_raw();
+    if u64::try_from(rgba_data.len()).ok() != Some(rgba_bytes) {
+        return Err(ArchiveError::InvalidFormat(
+            "Decoded PNG has an invalid pixel length".to_string(),
+        ));
+    }
+    *remaining -= rgba_bytes;
+    Ok((rgba_data, width, height))
 }
 
 /// Convert RGBA8 data to the target [`ImageFormat`].
@@ -574,13 +644,14 @@ impl SceneArchive {
     /// Deserialize an archive from a zip file.
     pub fn deserialize<R: Read + Seek>(reader: R) -> Result<Self, ArchiveError> {
         let mut zip = ZipArchive::new(reader)?;
+        let mut remaining_read_bytes = MAX_ARCHIVE_READ_BYTES;
+        let mut remaining_image_bytes = MAX_ARCHIVE_IMAGE_BYTES;
 
         // Read resources.json
         let manifest: ResourceManifest = {
-            let mut file = zip.by_name("resources.json")?;
-            let mut contents = String::new();
-            file.read_to_string(&mut contents)?;
-            serde_json::from_str(&contents)?
+            let file = zip.by_name("resources.json")?;
+            let contents = read_archive_entry(file, MAX_MANIFEST_BYTES, &mut remaining_read_bytes)?;
+            serde_json::from_slice(&contents)?
         };
 
         // Check version
@@ -588,21 +659,31 @@ impl SceneArchive {
             return Err(ArchiveError::UnsupportedVersion(manifest.version));
         }
 
+        if manifest.images.len() > MAX_ARCHIVE_RESOURCES
+            || manifest.fonts.len() > MAX_ARCHIVE_RESOURCES
+        {
+            return Err(ArchiveError::InvalidFormat(
+                "Archive contains too many resources".to_string(),
+            ));
+        }
+
         // Read draw_commands.json
         let commands: Vec<SerializableRenderCommand> = {
-            let mut file = zip.by_name("draw_commands.json")?;
-            let mut contents = String::new();
-            file.read_to_string(&mut contents)?;
-            serde_json::from_str(&contents)?
+            let file = zip.by_name("draw_commands.json")?;
+            let contents = read_archive_entry(file, MAX_COMMAND_BYTES, &mut remaining_read_bytes)?;
+            serde_json::from_slice(&contents)?
         };
 
         // Read images
         let mut images = Vec::with_capacity(manifest.images.len());
         for meta in &manifest.images {
-            let mut file = zip.by_name(&meta.entry.path)?;
-            let mut png_data = Vec::new();
-            file.read_to_end(&mut png_data)?;
-            let rgba_data = decode_png_to_rgba(&png_data)?;
+            let file = zip.by_name(&meta.entry.path)?;
+            let png_data = read_archive_entry(file, MAX_RESOURCE_BYTES, &mut remaining_read_bytes)?;
+            let (rgba_data, width, height) = decode_png_to_rgba(
+                &png_data,
+                (meta.width, meta.height),
+                &mut remaining_image_bytes,
+            )?;
 
             // Verify hash
             let hash = sha256_hex(&rgba_data);
@@ -617,17 +698,16 @@ impl SceneArchive {
                 data: Blob::from(rgba_data),
                 format: ImageFormat::Rgba8,
                 alpha_type: meta.alpha_type,
-                width: meta.width,
-                height: meta.height,
+                width,
+                height,
             });
         }
 
         // Read fonts (may be WOFF2-compressed or raw TTF/OTF)
         let mut fonts: Vec<Blob<u8>> = Vec::with_capacity(manifest.fonts.len());
         for meta in &manifest.fonts {
-            let mut file = zip.by_name(&meta.entry.path)?;
-            let mut raw_data = Vec::new();
-            file.read_to_end(&mut raw_data)?;
+            let file = zip.by_name(&meta.entry.path)?;
+            let raw_data = read_archive_entry(file, MAX_RESOURCE_BYTES, &mut remaining_read_bytes)?;
 
             // Verify hash
             let hash = sha256_hex(&raw_data);

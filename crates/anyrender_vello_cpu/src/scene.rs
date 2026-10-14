@@ -9,6 +9,8 @@ use vello_cpu::{ImageSource, PaintType, Pixmap};
 use crate::ImageCache;
 
 const DEFAULT_TOLERANCE: f64 = 0.1;
+#[cfg(feature = "filters")]
+const MAX_BACKDROP_RENDERS: usize = 8;
 
 fn anyrender_paint_to_vello_cpu_paint<'a>(
     paint: PaintRef<'a>,
@@ -84,6 +86,8 @@ pub struct VelloCpuScenePainter {
     /// for. Recording the stack is what lets it unwind to zero, take the
     /// snapshot, and put the stack back. See `paint_filtered_backdrop`.
     layers: Vec<OpenLayer>,
+    #[cfg(feature = "filters")]
+    backdrop_renders: usize,
 }
 
 impl VelloCpuScenePainter {
@@ -98,6 +102,8 @@ impl VelloCpuScenePainter {
             resources: vello_cpu::Resources::new(),
             image_cache: None,
             layers: Vec::new(),
+            #[cfg(feature = "filters")]
+            backdrop_renders: 0,
         }
     }
 
@@ -171,6 +177,7 @@ impl VelloCpuScenePainter {
     ///
     /// It costs a full render of the frame per backdrop-filtered layer, so it
     /// is priced for a handful of glass panels and not for a page of them.
+    /// Additional backdrop effects are skipped after eight snapshots in a frame.
     #[cfg(feature = "filters")]
     fn paint_filtered_backdrop(
         &mut self,
@@ -186,6 +193,9 @@ impl VelloCpuScenePainter {
         if cfg!(feature = "multithreading") {
             return;
         }
+        if self.backdrop_renders >= MAX_BACKDROP_RENDERS {
+            return;
+        }
         let Some(filter) = crate::filters::convert_filter(backdrop_filter) else {
             return;
         };
@@ -193,6 +203,7 @@ impl VelloCpuScenePainter {
         if width == 0 || height == 0 {
             return;
         }
+        self.backdrop_renders += 1;
 
         // `render_to_pixmap` asserts `!wide.has_layers()`, so the snapshot has
         // to be taken at depth zero. Blitz-style painters reach `push_layer`
@@ -246,6 +257,10 @@ impl PaintScene for VelloCpuScenePainter {
     fn reset(&mut self) {
         self.render_ctx.reset();
         self.layers.clear();
+        #[cfg(feature = "filters")]
+        {
+            self.backdrop_renders = 0;
+        }
     }
 
     fn push_layer(
