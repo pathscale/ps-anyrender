@@ -1,12 +1,67 @@
 // Copyright 2018 the Kurbo Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! A fork of Kurbo's SVG path parser which adds support for NaN and Infinity values
+//! A fork of Kurbo's SVG path parser with finite numbers and bounded arc subdivision.
 
 use core::error::Error;
 use core::fmt::{self, Display, Formatter};
 
-use peniko::kurbo::{Arc, BezPath, Point, SvgArc};
+use peniko::kurbo::{Arc, BezPath, PathEl, Point, SvgArc};
+
+const MAX_ARC_SEGMENTS: usize = 64;
+
+fn point_is_finite(point: Point) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn append_bounded_arc(path: &mut BezPath, arc: Arc) -> Result<(), SvgParseError> {
+    if !point_is_finite(arc.center)
+        || !arc.radii.x.is_finite()
+        || !arc.radii.y.is_finite()
+        || !arc.start_angle.is_finite()
+        || !arc.sweep_angle.is_finite()
+        || !arc.x_rotation.is_finite()
+    {
+        return Err(SvgParseError::Wrong);
+    }
+    if arc.sweep_angle == 0.0 {
+        return Ok(());
+    }
+
+    let radius = arc.radii.x.abs().max(arc.radii.y.abs());
+    let n_err = (1.1163 * (radius / 0.1)).powf(1.0 / 6.0).max(3.999_999);
+    let count = (n_err * arc.sweep_angle.abs() / core::f64::consts::TAU)
+        .ceil()
+        .clamp(1.0, MAX_ARC_SEGMENTS as f64) as usize;
+    let step = arc.sweep_angle / count as f64;
+    let arm = (4.0 / 3.0) * (0.25 * step).abs().tan() * arc.sweep_angle.signum();
+
+    fn sample(arc: &Arc, angle: f64) -> peniko::kurbo::Vec2 {
+        let (sin, cos) = angle.sin_cos();
+        let u = arc.radii.x * cos;
+        let v = arc.radii.y * sin;
+        let (rotation_sin, rotation_cos) = arc.x_rotation.sin_cos();
+        peniko::kurbo::Vec2::new(
+            u * rotation_cos - v * rotation_sin,
+            u * rotation_sin + v * rotation_cos,
+        )
+    }
+
+    for index in 0..count {
+        let angle0 = arc.start_angle + step * index as f64;
+        let angle1 = arc.start_angle + step * (index + 1) as f64;
+        let p0 = sample(&arc, angle0);
+        let p3 = sample(&arc, angle1);
+        let p1 = arc.center + p0 + arm * sample(&arc, angle0 + core::f64::consts::FRAC_PI_2);
+        let p2 = arc.center + p3 - arm * sample(&arc, angle1 + core::f64::consts::FRAC_PI_2);
+        let p3 = arc.center + p3;
+        if !point_is_finite(p1) || !point_is_finite(p2) || !point_is_finite(p3) {
+            return Err(SvgParseError::Wrong);
+        }
+        path.curve_to(p1, p2, p3);
+    }
+    Ok(())
+}
 
 /// Try to parse a bezier path from an SVG path element.
 ///
@@ -113,13 +168,16 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
             }
             b'a' | b'A' => {
                 let radii = lexer.get_number_pair()?;
-                let x_rotation = lexer.get_number()?.to_radians();
+                let x_rotation = lexer.get_number()?.rem_euclid(360.0).to_radians();
                 lexer.opt_comma();
                 let large_arc = lexer.get_flag()?;
                 lexer.opt_comma();
                 let sweep = lexer.get_flag()?;
                 lexer.opt_comma();
                 let p = lexer.get_maybe_relative(c)?;
+                if !point_is_finite(lexer.last_pt) || !point_is_finite(p) {
+                    return Err(SvgParseError::Wrong);
+                }
                 let svg_arc = SvgArc {
                     from: lexer.last_pt,
                     to: p,
@@ -132,9 +190,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                 match Arc::from_svg_arc(&svg_arc) {
                     Some(arc) => {
                         // TODO: consider making tolerance configurable
-                        arc.to_cubic_beziers(0.1, |p1, p2, p3| {
-                            path.curve_to(p1, p2, p3);
-                        });
+                        append_bounded_arc(&mut path, arc)?;
                     }
                     None => {
                         path.line_to(p);
@@ -151,6 +207,19 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                 implicit_moveto = Some(first_pt);
             }
             _ => return Err(SvgParseError::UnknownCommand(c as char)),
+        }
+    }
+    for element in path.elements() {
+        let finite = match element {
+            PathEl::MoveTo(point) | PathEl::LineTo(point) => point_is_finite(*point),
+            PathEl::QuadTo(p1, p2) => point_is_finite(*p1) && point_is_finite(*p2),
+            PathEl::CurveTo(p1, p2, p3) => {
+                point_is_finite(*p1) && point_is_finite(*p2) && point_is_finite(*p3)
+            }
+            PathEl::ClosePath => true,
+        };
+        if !finite {
+            return Err(SvgParseError::Wrong);
         }
     }
     Ok(path)
@@ -236,47 +305,18 @@ impl SvgLexer<'_> {
         self.ix -= 1;
     }
 
-    fn get_str(&mut self, s: &[u8]) -> Result<(), SvgParseError> {
-        for &expected_c in s.iter() {
-            let c = self.get_byte().ok_or(SvgParseError::UnexpectedEof)?;
-            if c != expected_c {
-                return Err(SvgParseError::Wrong);
-            }
-        }
-
-        Ok(())
-    }
-
     fn get_number(&mut self) -> Result<f64, SvgParseError> {
         self.skip_ws();
         let start = self.ix;
-        let mut is_negative = false;
         let mut c = self.get_byte().ok_or(SvgParseError::UnexpectedEof)?;
-
-        // Handle NaN
-        if c == b'n' || c == b'N' {
-            self.unget();
-            self.get_str(b"NaN")?;
-            return Ok(f64::NAN);
-        }
 
         // If first byte is + or - then read the next byte
         if c == b'-' || c == b'+' {
-            is_negative = c == b'-';
             c = self.get_byte().ok_or(SvgParseError::UnexpectedEof)?;
         }
-
-        // Handle Infinity, +Infinity, and -Infinity
-        if c == b'i' || c == b'I' {
-            self.get_str(b"Infinity")?;
-            if is_negative {
-                return Ok(-f64::INFINITY);
-            } else {
-                return Ok(f64::INFINITY);
-            };
+        if c.is_ascii_alphabetic() {
+            return Err(SvgParseError::Wrong);
         }
-
-        // Reset back by 1 byte after checking for NaN and Infinity
         self.unget();
 
         let mut digit_count = 0;
@@ -311,9 +351,13 @@ impl SvgLexer<'_> {
             }
         }
         if digit_count > 0 {
-            self.data[start..self.ix]
-                .parse()
-                .map_err(|_| SvgParseError::Wrong)
+            let value = self.data[start..self.ix]
+                .parse::<f64>()
+                .map_err(|_| SvgParseError::Wrong)?;
+            if !value.is_finite() {
+                return Err(SvgParseError::Wrong);
+            }
+            Ok(value)
         } else {
             Err(SvgParseError::Wrong)
         }
