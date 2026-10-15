@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80" viewBox="0 0 240 80">
+  <defs>
+    <clipPath id="windows" clipPathUnits="userSpaceOnUse">
+      <rect x="10" y="10" width="40" height="60"/>
+      <rect x="90" y="10" width="40" height="60"/>
+    </clipPath>
+  </defs>
+  <!-- Only the second clip child intersects the painted group. -->
+  <g clip-path="url(#windows)" fill="#e04040">
+    <rect x="80" y="0" width="80" height="80"/>
+  </g>
+</svg>
