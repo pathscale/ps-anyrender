@@ -440,6 +440,10 @@ impl WindowRenderer for VelloWindowRenderer {
 
         debug_timer!(timer, feature = "log_frame_times");
 
+        // A failed surface acquisition or present can leave the preceding
+        // frame recorded. Start every frame empty, including those retries.
+        self.scene.reset();
+
         // Regenerate the vello scene
         let frame = (render_surface.config.width, render_surface.config.height);
         let mut painter = VelloScenePainter {
