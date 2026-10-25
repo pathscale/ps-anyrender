@@ -8,7 +8,8 @@ mod cache;
 mod metal;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod opengl;
-#[cfg(feature = "vulkan")]
+// Vulkan dependencies are unavailable on Apple targets, which use Metal.
+#[cfg(all(feature = "vulkan", not(any(target_os = "macos", target_os = "ios"))))]
 mod vulkan;
 
 pub use image_renderer::SkiaImageRenderer;

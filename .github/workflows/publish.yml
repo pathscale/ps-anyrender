@@ -16,12 +16,6 @@
 name: Publish
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - Cargo.toml
-      - crates/**
-      - .github/workflows/publish.yml
   workflow_dispatch:
     inputs:
       dry_run:
