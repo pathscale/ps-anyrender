@@ -274,6 +274,104 @@ fn test_glyph_run_roundtrip_with_subsetting_and_woff2() {
     assert_glyph_run_preserved(&restored);
 }
 
+fn read_woff2_uint_base128(data: &[u8], cursor: &mut usize) -> usize {
+    let mut value = 0usize;
+    for _ in 0..5 {
+        let byte = data[*cursor];
+        *cursor += 1;
+        value = (value << 7) | usize::from(byte & 0x7f);
+        if byte & 0x80 == 0 {
+            return value;
+        }
+    }
+    panic!("Invalid UIntBase128 in writer-generated WOFF2 directory");
+}
+
+fn woff2_directory_end(data: &[u8]) -> usize {
+    assert!(data.starts_with(b"wOF2"));
+    let table_count = u16::from_be_bytes(data[12..14].try_into().unwrap()) as usize;
+    let mut cursor = 48usize;
+    for _ in 0..table_count {
+        let flags = data[cursor];
+        cursor += 1;
+        let tag_index = flags & 0x3f;
+        let transform_version = flags >> 6;
+        let custom_tag = if tag_index == 63 {
+            let tag = &data[cursor..cursor + 4];
+            cursor += 4;
+            Some(tag)
+        } else {
+            None
+        };
+        read_woff2_uint_base128(data, &mut cursor);
+        let is_glyf_or_loca = matches!(tag_index, 10 | 11)
+            || custom_tag.is_some_and(|tag| tag == b"glyf" || tag == b"loca");
+        let has_transform_length = if is_glyf_or_loca {
+            transform_version == 0
+        } else {
+            transform_version != 0
+        };
+        if has_transform_length {
+            read_woff2_uint_base128(data, &mut cursor);
+        }
+    }
+    cursor
+}
+
+#[test]
+fn test_to_scene_rejects_malformed_woff2_without_panicking() {
+    let font = roboto_font();
+    let scene = build_glyph_scene(&font);
+    let mut archive = SceneArchive::from_scene(&scene, &subset_and_woff2_config()).unwrap();
+    let original = archive.fonts[0].data().to_vec();
+
+    let mut bad_span = original.clone();
+    bad_span[20..24].copy_from_slice(&u32::MAX.to_be_bytes());
+    archive.fonts[0] = Blob::from(bad_span);
+    assert!(matches!(archive.to_scene(), Err(ArchiveError::FontProcessing(_))));
+
+    let mut truncated_brotli = original.clone();
+    let directory_end = woff2_directory_end(&original);
+    let original_compressed_size =
+        u32::from_be_bytes(original[20..24].try_into().unwrap()) as usize;
+    assert!(original_compressed_size > 1);
+    assert!(directory_end < original.len());
+    assert!(original_compressed_size <= original.len() - directory_end);
+    truncated_brotli[directory_end] = 0xff;
+    archive.fonts[0] = Blob::from(truncated_brotli);
+    assert!(matches!(archive.to_scene(), Err(ArchiveError::FontProcessing(_))));
+}
+
+#[test]
+fn test_woff2_manifest_size_is_advisory_and_unsubsetted_font_roundtrips() {
+    let font = roboto_font();
+    let scene = build_glyph_scene(&font);
+    let config = SerializeConfig::new().with_woff2_fonts(true);
+    let mut archive = SceneArchive::from_scene(&scene, &config).unwrap();
+    assert!(archive.fonts[0].data().starts_with(b"wOF2"));
+    archive.manifest.fonts[0].entry.size = 1;
+    let restored = archive.to_scene().unwrap();
+    assert_glyph_run_preserved(&restored);
+
+    let glyph_run = match &restored.commands[0] {
+        RenderCommand::GlyphRun(glyph_run) => glyph_run,
+        other => panic!("Expected GlyphRun command, got {other:?}"),
+    };
+    let font_ref = read_fonts::FontRef::new(glyph_run.font_data.data.data()).unwrap();
+    let loca = font_ref.loca(None).unwrap();
+    let glyf = font_ref.glyf().unwrap();
+    for &gid in &[43u32, 72, 79] {
+        let glyph = loca
+            .get_glyf(read_fonts::types::GlyphId::new(gid), &glyf)
+            .unwrap();
+        assert!(
+            glyph.is_some(),
+            "Glyph {gid} should have a usable outline after WOFF2 restoration"
+        );
+    }
+}
+
+
 #[test]
 fn test_font_deduplication() {
     let font = roboto_font();

@@ -41,6 +41,9 @@ mod json_formatter;
 
 use font_writer::FontWriter;
 
+const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RETAINED_FONT_BYTES: usize = 256 * 1024 * 1024;
+
 /// A render command with resources replaced by IDs.
 pub type SerializableRenderCommand = RenderCommand<FontResourceId, SerializableBrush>;
 
@@ -479,6 +482,73 @@ fn convert_to_rgba(image: &ImageData) -> Result<Blob<u8>, ArchiveError> {
     }
 }
 
+// Decode fonts with independent limits for the encoded blob, each reconstructed font,
+// and the cumulative bytes retained by the resulting scene.
+fn decode_fonts(fonts: &[Blob<u8>]) -> Result<Vec<FontData>, ArchiveError> {
+    decode_fonts_with_limits(
+        fonts,
+        MAX_FONT_BYTES,
+        MAX_RETAINED_FONT_BYTES,
+        wuff::decompress_woff2,
+    )
+}
+
+fn decode_fonts_with_limits<F>(
+    fonts: &[Blob<u8>],
+    per_font_limit: usize,
+    retained_limit: usize,
+    mut decode_woff2: F,
+) -> Result<Vec<FontData>, ArchiveError>
+where
+    F: FnMut(&[u8]) -> Result<Vec<u8>, wuff::WuffErr>,
+{
+    let mut retained_bytes = 0usize;
+    let mut fonts_ttf = Vec::new();
+
+    for font_blob in fonts {
+        let data = font_blob.data();
+        if data.len() > per_font_limit {
+            return Err(ArchiveError::FontProcessing(format!(
+                "Encoded font exceeds the {per_font_limit}-byte limit"
+            )));
+        }
+
+        if data.starts_with(b"wOF2") {
+            let decoded = decode_woff2(data).map_err(|e| {
+                ArchiveError::FontProcessing(format!("WOFF2 decoding failed: {e}"))
+            })?;
+            ensure_font_budget(decoded.len(), per_font_limit, retained_bytes, retained_limit)?;
+            retained_bytes += decoded.len();
+            fonts_ttf.push(FontData::new(Blob::from(decoded), 0));
+        } else {
+            ensure_font_budget(data.len(), per_font_limit, retained_bytes, retained_limit)?;
+            retained_bytes += data.len();
+            fonts_ttf.push(FontData::new(Blob::from(data.to_vec()), 0));
+        }
+    }
+
+    Ok(fonts_ttf)
+}
+
+fn ensure_font_budget(
+    decoded_len: usize,
+    per_font_limit: usize,
+    retained_bytes: usize,
+    retained_limit: usize,
+) -> Result<(), ArchiveError> {
+    if decoded_len > per_font_limit {
+        return Err(ArchiveError::FontProcessing(format!(
+            "Decoded font exceeds the {per_font_limit}-byte limit"
+        )));
+    }
+    if decoded_len > retained_limit.saturating_sub(retained_bytes) {
+        return Err(ArchiveError::FontProcessing(format!(
+            "Decoded fonts exceed the {retained_limit}-byte retained limit"
+        )));
+    }
+    Ok(())
+}
+
 impl SceneArchive {
     /// Create a new SceneArchive from a recorded Scene.
     pub fn from_scene(scene: &Scene, config: &SerializeConfig) -> Result<Self, ArchiveError> {
@@ -572,22 +642,8 @@ impl SceneArchive {
             })
             .collect::<Result<Vec<_>, ArchiveError>>()?;
 
-        // Decode fonts.
-        let fonts_ttf: Vec<FontData> = self
-            .fonts
-            .iter()
-            .map(|font_blob| {
-                let data = font_blob.data();
-                let ttf_data = if data.starts_with(b"wOF2") {
-                    wuff::decompress_woff2(data).map_err(|e| {
-                        ArchiveError::FontProcessing(format!("WOFF2 decoding failed: {e}"))
-                    })?
-                } else {
-                    data.to_vec()
-                };
-                Ok(FontData::new(Blob::from(ttf_data), 0))
-            })
-            .collect::<Result<Vec<_>, ArchiveError>>()?;
+        // Decode and account for every font before retaining it.
+        let fonts_ttf = decode_fonts(&self.fonts)?;
 
         let reconstructor = ResourceReconstructor::new(fonts_ttf, images);
 
@@ -813,5 +869,55 @@ impl From<zip::result::ZipError> for ArchiveError {
 impl From<image::ImageError> for ArchiveError {
     fn from(e: image::ImageError) -> Self {
         ArchiveError::Image(e)
+    }
+}
+
+#[cfg(test)]
+mod font_budget_tests {
+    use super::*;
+
+    fn raw_font(data: &[u8]) -> Blob<u8> {
+        Blob::from(data.to_vec())
+    }
+
+    #[test]
+    fn raw_font_limits_accept_inclusive_per_font_and_total_boundaries() {
+        let fonts = [raw_font(b"1234"), raw_font(b"5678")];
+        let decoded = decode_fonts_with_limits(&fonts, 4, 8, |_| unreachable!()).unwrap();
+        assert_eq!(decoded[0].data.data(), b"1234");
+        assert_eq!(decoded[1].data.data(), b"5678");
+    }
+
+    #[test]
+    fn raw_font_limits_reject_per_font_and_cumulative_overflow() {
+        let per_font_over = [raw_font(b"12345")];
+        assert!(matches!(
+            decode_fonts_with_limits(&per_font_over, 4, 8, |_| unreachable!()),
+            Err(ArchiveError::FontProcessing(_))
+        ));
+
+        let total_over = [raw_font(b"1234"), raw_font(b"56789")];
+        assert!(matches!(
+            decode_fonts_with_limits(&total_over, 5, 8, |_| unreachable!()),
+            Err(ArchiveError::FontProcessing(_))
+        ));
+    }
+
+    #[test]
+    fn woff2_actual_output_is_charged_before_retention() {
+        let encoded = [raw_font(b"wOF2x")];
+        let decoded = decode_fonts_with_limits(&encoded, 8, 8, |_| {
+            Ok(b"123456789".to_vec())
+        });
+        assert!(matches!(decoded, Err(ArchiveError::FontProcessing(_))));
+    }
+
+    #[test]
+    fn woff2_decode_errors_remain_font_processing_errors() {
+        let encoded = [raw_font(b"wOF2x")];
+        let decoded = decode_fonts_with_limits(&encoded, 8, 8, |_| {
+            Err(wuff::WuffErr::GenericError)
+        });
+        assert!(matches!(decoded, Err(ArchiveError::FontProcessing(_))));
     }
 }
