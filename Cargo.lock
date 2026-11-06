@@ -2066,7 +2066,7 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello"
-version = "0.14.1"
+version = "0.14.3"
 dependencies = [
  "futures-channel",
  "kurbo",
@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "ps-anyrender-vello-cpu"
-version = "0.17.1"
+version = "0.17.3"
 dependencies = [
  "kurbo",
  "peniko",

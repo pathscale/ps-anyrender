@@ -9,12 +9,28 @@ use core::fmt::{self, Display, Formatter};
 use peniko::kurbo::{Arc, BezPath, PathEl, Point, SvgArc};
 
 const MAX_ARC_SEGMENTS: usize = 64;
+const MAX_PATH_ELEMENTS: usize = 262_144;
 
 fn point_is_finite(point: Point) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
-fn append_bounded_arc(path: &mut BezPath, arc: Arc) -> Result<(), SvgParseError> {
+fn ensure_path_room(
+    path: &BezPath,
+    additional: usize,
+    max_elements: usize,
+) -> Result<(), SvgParseError> {
+    if additional > max_elements.saturating_sub(path.elements().len()) {
+        return Err(SvgParseError::PathElementLimit);
+    }
+    Ok(())
+}
+
+fn append_bounded_arc(
+    path: &mut BezPath,
+    arc: Arc,
+    max_elements: usize,
+) -> Result<(), SvgParseError> {
     if !point_is_finite(arc.center)
         || !arc.radii.x.is_finite()
         || !arc.radii.y.is_finite()
@@ -33,6 +49,7 @@ fn append_bounded_arc(path: &mut BezPath, arc: Arc) -> Result<(), SvgParseError>
     let count = (n_err * arc.sweep_angle.abs() / core::f64::consts::TAU)
         .ceil()
         .clamp(1.0, MAX_ARC_SEGMENTS as f64) as usize;
+    ensure_path_room(path, count, max_elements)?;
     let step = arc.sweep_angle / count as f64;
     let arm = (4.0 / 3.0) * (0.25 * step).abs().tan() * arc.sweep_angle.signum();
 
@@ -69,6 +86,13 @@ fn append_bounded_arc(path: &mut BezPath, arc: Arc) -> Result<(), SvgParseError>
 /// user controls the source of paths, and is not intended as a replacement
 /// for a general, robust SVG parser.
 pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
+    parse_svg_path_with_limit(data, MAX_PATH_ELEMENTS)
+}
+
+fn parse_svg_path_with_limit(
+    data: &str,
+    max_elements: usize,
+) -> Result<BezPath, SvgParseError> {
     let mut lexer = SvgLexer::new(data);
     let mut path = BezPath::new();
     let mut last_cmd = 0;
@@ -82,6 +106,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
             }
 
             if let Some(pt) = implicit_moveto.take() {
+                ensure_path_room(&path, 1, max_elements)?;
                 path.move_to(pt);
             }
         }
@@ -89,6 +114,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
             b'm' | b'M' => {
                 implicit_moveto = None;
                 let pt = lexer.get_maybe_relative(c)?;
+                ensure_path_room(&path, 1, max_elements)?;
                 path.move_to(pt);
                 lexer.last_pt = pt;
                 first_pt = pt;
@@ -97,6 +123,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
             }
             b'l' | b'L' => {
                 let pt = lexer.get_maybe_relative(c)?;
+                ensure_path_room(&path, 1, max_elements)?;
                 path.line_to(pt);
                 lexer.last_pt = pt;
                 last_ctrl = Some(pt);
@@ -109,6 +136,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                     x += lexer.last_pt.x;
                 }
                 let pt = Point::new(x, lexer.last_pt.y);
+                ensure_path_room(&path, 1, max_elements)?;
                 path.line_to(pt);
                 lexer.last_pt = pt;
                 last_ctrl = Some(pt);
@@ -121,6 +149,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                     y += lexer.last_pt.y;
                 }
                 let pt = Point::new(lexer.last_pt.x, y);
+                ensure_path_room(&path, 1, max_elements)?;
                 path.line_to(pt);
                 lexer.last_pt = pt;
                 last_ctrl = Some(pt);
@@ -129,6 +158,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
             b'q' | b'Q' => {
                 let p1 = lexer.get_maybe_relative(c)?;
                 let p2 = lexer.get_maybe_relative(c)?;
+                ensure_path_room(&path, 1, max_elements)?;
                 path.quad_to(p1, p2);
                 last_ctrl = Some(p1);
                 lexer.last_pt = p2;
@@ -140,6 +170,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                     None => lexer.last_pt,
                 };
                 let p2 = lexer.get_maybe_relative(c)?;
+                ensure_path_room(&path, 1, max_elements)?;
                 path.quad_to(p1, p2);
                 last_ctrl = Some(p1);
                 lexer.last_pt = p2;
@@ -149,6 +180,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                 let p1 = lexer.get_maybe_relative(c)?;
                 let p2 = lexer.get_maybe_relative(c)?;
                 let p3 = lexer.get_maybe_relative(c)?;
+                ensure_path_room(&path, 1, max_elements)?;
                 path.curve_to(p1, p2, p3);
                 last_ctrl = Some(p2);
                 lexer.last_pt = p3;
@@ -161,6 +193,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                 };
                 let p2 = lexer.get_maybe_relative(c)?;
                 let p3 = lexer.get_maybe_relative(c)?;
+                ensure_path_room(&path, 1, max_elements)?;
                 path.curve_to(p1, p2, p3);
                 last_ctrl = Some(p2);
                 lexer.last_pt = p3;
@@ -190,9 +223,10 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                 match Arc::from_svg_arc(&svg_arc) {
                     Some(arc) => {
                         // TODO: consider making tolerance configurable
-                        append_bounded_arc(&mut path, arc)?;
+                        append_bounded_arc(&mut path, arc, max_elements)?;
                     }
                     None => {
+                        ensure_path_room(&path, 1, max_elements)?;
                         path.line_to(p);
                     }
                 }
@@ -202,6 +236,7 @@ pub(crate) fn parse_svg_path(data: &str) -> Result<BezPath, SvgParseError> {
                 last_cmd = c;
             }
             b'z' | b'Z' => {
+                ensure_path_room(&path, 1, max_elements)?;
                 path.close_path();
                 lexer.last_pt = first_pt;
                 implicit_moveto = Some(first_pt);
@@ -237,6 +272,8 @@ pub(crate) enum SvgParseError {
     UnknownCommand(char),
     /// Encountered a command that precedes expected 'moveto' command.
     UninitializedPath,
+    /// The path emitted more elements than the configured limit.
+    PathElementLimit,
 }
 
 impl Display for SvgParseError {
@@ -247,6 +284,9 @@ impl Display for SvgParseError {
             SvgParseError::UnknownCommand(letter) => write!(f, "Unknown command, \"{letter}\""),
             SvgParseError::UninitializedPath => {
                 write!(f, "Uninitialized path (missing moveto command)")
+            }
+            SvgParseError::PathElementLimit => {
+                write!(f, "SVG path exceeds the element limit")
             }
         }
     }
@@ -396,5 +436,56 @@ impl SvgLexer<'_> {
                 self.unget();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_svg_path, parse_svg_path_with_limit, SvgParseError, MAX_PATH_ELEMENTS};
+
+    fn repeated_line_path(line_count: usize) -> String {
+        let mut data = String::from("M0 0 L1 1");
+        for _ in 1..line_count {
+            data.push_str(" 1 1");
+        }
+        data
+    }
+
+    #[test]
+    fn emitted_path_element_limit_is_inclusive_with_implicit_repeats() {
+        let at_limit = repeated_line_path(MAX_PATH_ELEMENTS - 1);
+        assert_eq!(parse_svg_path(&at_limit).unwrap().elements().len(), MAX_PATH_ELEMENTS);
+
+        let over_limit = repeated_line_path(MAX_PATH_ELEMENTS);
+        assert!(matches!(
+            parse_svg_path(&over_limit),
+            Err(SvgParseError::PathElementLimit)
+        ));
+    }
+
+    #[test]
+    fn arc_checks_its_full_emission_against_remaining_room() {
+        let path = "M0 0 A10000 10000 0 0 1 10000 10000";
+        assert!(matches!(
+            parse_svg_path_with_limit(path, 2),
+            Err(SvgParseError::PathElementLimit)
+        ));
+    }
+
+    #[test]
+    fn close_path_implicit_move_counts_toward_the_limit() {
+        assert!(matches!(
+            parse_svg_path_with_limit("M0 0 Z L1 1", 3),
+            Err(SvgParseError::PathElementLimit)
+        ));
+    }
+
+    #[test]
+    fn absolute_and_relative_paths_keep_the_same_elements() {
+        let absolute = "M1 2 L4 6 Q5 7 8 9 C9 10 11 12 13 14 A10 10 0 0 1 23 24 Z";
+        let relative = "m1 2 l3 4 q1 1 4 3 c1 1 3 3 5 5 a10 10 0 0 1 10 10 z";
+        let absolute = parse_svg_path(absolute).unwrap();
+        let relative = parse_svg_path(relative).unwrap();
+        assert_eq!(absolute.elements(), relative.elements());
     }
 }
