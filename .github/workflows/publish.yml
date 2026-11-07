@@ -39,6 +39,8 @@ jobs:
     name: ${{ inputs.dry_run && 'Verify' || 'Publish' }}
     runs-on: ubicloud-standard-8
     steps:
+      - name: Require master ref
+        run: test "$GITHUB_REF" = refs/heads/master
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -78,7 +80,7 @@ jobs:
           for crate in "${crates[@]}"; do
             if [ "$DRY_RUN" = "true" ]; then
               echo "::group::dry-run $crate"
-              cargo publish --dry-run -p "$crate"
+              cargo publish --registry crates-io --dry-run -p "$crate"
               echo "::endgroup::"
               continue
             fi
@@ -120,7 +122,7 @@ jobs:
             fi
 
             echo "::group::publish $crate $version"
-            cargo publish -p "$crate"
+            cargo publish --registry crates-io -p "$crate"
             echo "::endgroup::"
 
             # The index is not immediately readable after an upload, and the
