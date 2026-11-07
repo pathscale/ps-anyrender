@@ -177,3 +177,127 @@ fn the_snapshot_leaves_the_layer_stack_exactly_as_it_found_it() {
         &mut buffer,
     );
 }
+
+/// Resize used to keep the existing render context. Its reset methods retain
+/// options such as the aliasing threshold, while a fresh context restores the
+/// defaults. A fractional edge makes that retained option visible in pixels.
+#[cfg(not(feature = "multithreading"))]
+fn draw_fractional_edge(
+    renderer: &mut VelloCpuImageRenderer,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    use anyrender::ImageRenderer;
+
+    let mut buffer = vec![0; (width * height * 4) as usize];
+    renderer.render(
+        |scene| {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &Rect::new(10.25, 10.0, 30.0, 30.0),
+            );
+        },
+        &mut buffer,
+    );
+    buffer
+}
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn resize_restores_fresh_render_context_defaults() {
+    use anyrender::ImageRenderer;
+
+    for (width, height) in [(WIDTH, HEIGHT), (WIDTH + 1, HEIGHT + 1)] {
+        let mut resized = VelloCpuImageRenderer::new(WIDTH, HEIGHT);
+        let mut setup_buffer = vec![0; (WIDTH * HEIGHT * 4) as usize];
+        resized.render(
+            |scene| scene.render_ctx.set_aliasing_threshold(Some(0)),
+            &mut setup_buffer,
+        );
+
+        resized.resize(width, height);
+        let actual = draw_fractional_edge(&mut resized, width, height);
+        let mut fresh = VelloCpuImageRenderer::new(width, height);
+        let expected = draw_fractional_edge(&mut fresh, width, height);
+        assert_eq!(actual, expected, "resize to {width}x{height}");
+    }
+}
+
+/// Consume all eight snapshots in one frame, then confirm the next frame can
+/// take its first snapshot after the painter is reset or resized.
+#[cfg(all(feature = "filters", not(feature = "multithreading")))]
+fn assert_backdrop_budget_recovers_after_resize_or_reset(resize: bool) {
+    use anyrender::ImageRenderer;
+
+    let mut renderer = VelloCpuImageRenderer::new(WIDTH, HEIGHT);
+    let mut buffer = vec![0; (WIDTH * HEIGHT * 4) as usize];
+    let panel = Rect::new(40.0, 0.0, 160.0, f64::from(HEIGHT));
+    renderer.render(
+        |scene| {
+            for _ in 0..8 {
+                scene.push_layer(
+                    Mix::Normal,
+                    1.0,
+                    Affine::IDENTITY,
+                    &panel,
+                    None,
+                    Some(blur(4.0)),
+                );
+                scene.pop_layer();
+            }
+        },
+        &mut buffer,
+    );
+
+    if resize {
+        renderer.resize(WIDTH, HEIGHT);
+    } else {
+        renderer.reset();
+    }
+
+    buffer.fill(0);
+    renderer.render(
+        |scene| {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::BLACK,
+                None,
+                &Rect::new(0.0, 0.0, f64::from(SEAM), f64::from(HEIGHT)),
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &Rect::new(
+                    f64::from(SEAM),
+                    0.0,
+                    f64::from(WIDTH),
+                    f64::from(HEIGHT),
+                ),
+            );
+            scene.push_layer(
+                Mix::Normal,
+                1.0,
+                Affine::IDENTITY,
+                &panel,
+                None,
+                Some(blur(8.0)),
+            );
+            scene.pop_layer();
+        },
+        &mut buffer,
+    );
+    assert_blurred(&buffer, 0);
+}
+
+#[cfg(all(feature = "filters", not(feature = "multithreading")))]
+#[test]
+fn backdrop_budget_resets_between_frames() {
+    assert_backdrop_budget_recovers_after_resize_or_reset(false);
+    assert_backdrop_budget_recovers_after_resize_or_reset(true);
+}

@@ -122,6 +122,26 @@ impl VelloCpuScenePainter {
         self.layers.len()
     }
 
+    /// Reset the recorded scene and all per-frame backdrop bookkeeping.
+    pub fn reset(&mut self) {
+        self.render_ctx.reset();
+        self.layers.clear();
+        #[cfg(feature = "filters")]
+        {
+            self.backdrop_renders = 0;
+        }
+    }
+
+    /// Start a fresh scene at the requested dimensions.
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.render_ctx = vello_cpu::RenderContext::new(width, height);
+        self.layers.clear();
+        #[cfg(feature = "filters")]
+        {
+            self.backdrop_renders = 0;
+        }
+    }
+
     /// Push a layer onto the context and remember it.
     fn open(&mut self, layer: OpenLayer) {
         self.render_ctx.set_transform(layer.transform);
@@ -255,12 +275,7 @@ impl VelloCpuScenePainter {
 impl RenderContext for VelloCpuScenePainter {}
 impl PaintScene for VelloCpuScenePainter {
     fn reset(&mut self) {
-        self.render_ctx.reset();
-        self.layers.clear();
-        #[cfg(feature = "filters")]
-        {
-            self.backdrop_renders = 0;
-        }
+        VelloCpuScenePainter::reset(self);
     }
 
     fn push_layer(
