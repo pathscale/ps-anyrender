@@ -4,7 +4,7 @@
 use crate::util;
 use anyrender::PaintScene;
 use kurbo::{Affine, BezPath};
-use peniko::{BlendMode, Fill};
+use peniko::{BlendMode, Color, Compose, Fill};
 use usvg::{Node, Path};
 
 pub(crate) fn render_group<S: PaintScene, F: FnMut(&mut S, &usvg::Node)>(
@@ -22,59 +22,55 @@ pub(crate) fn render_group<S: PaintScene, F: FnMut(&mut S, &usvg::Node)>(
                 let is_fully_opaque = alpha >= 1.0;
                 let mix = util::to_mix(g.blend_mode());
 
-                // Support clip-path with a single path
-                let clip_path = g
-                    .clip_path()
-                    .and_then(|path| path.root().children().first());
+                let layer_transform = global_transform * transform;
+                let clip_path = g.clip_path();
 
-                let did_push_layer = match clip_path {
-                    // If there is a clip path, then push a layer that clips using it
-                    Some(usvg::Node::Path(clip_path)) => {
-                        let local_path = util::to_bez_path(clip_path);
-                        scene.push_layer(
-                            BlendMode {
-                                mix,
-                                compose: peniko::Compose::SrcOver,
-                            },
-                            alpha,
-                            global_transform * transform,
-                            &local_path,
-                            None,
-                            None,
-                        );
+                #[allow(deprecated)]
+                let needs_layer =
+                    clip_path.is_some() || mix != peniko::Mix::Normal || !is_fully_opaque;
+                if !needs_layer {
+                    render_group(scene, g, Affine::IDENTITY, global_transform, error_handler);
+                    continue;
+                }
 
-                        true
-                    }
-                    // Else if there is blending to be done then push a layer with a rectangular clip
-                    #[allow(deprecated)]
-                    _ if mix != peniko::Mix::Normal || !is_fully_opaque => {
-                        // Use bounding box as the clip path.
-                        let bounding_box = g.layer_bounding_box();
-                        let rect = kurbo::Rect::from_origin_size(
-                            (bounding_box.x(), bounding_box.y()),
-                            (bounding_box.width() as f64, bounding_box.height() as f64),
-                        );
-                        scene.push_layer(
-                            BlendMode {
-                                mix,
-                                compose: peniko::Compose::SrcOver,
-                            },
-                            alpha,
-                            global_transform * transform,
-                            &rect,
-                            None,
-                            None,
-                        );
+                let bounding_box = g.layer_bounding_box();
+                let rect = kurbo::Rect::from_origin_size(
+                    (bounding_box.x(), bounding_box.y()),
+                    (bounding_box.width() as f64, bounding_box.height() as f64),
+                );
+                scene.push_layer(
+                    BlendMode {
+                        mix,
+                        compose: Compose::SrcOver,
+                    },
+                    alpha,
+                    layer_transform,
+                    &rect,
+                    None,
+                    None,
+                );
 
-                        true
-                    }
-                    // Else if there is no clip or blending then don't push a layer
-                    _ => false,
-                };
+                if let Some(clip_path) = clip_path {
+                    render_clip_path(scene, clip_path, layer_transform, layer_transform, &rect);
+                    scene.push_layer(
+                        BlendMode {
+                            mix: peniko::Mix::Normal,
+                            compose: Compose::SrcIn,
+                        },
+                        1.0,
+                        layer_transform,
+                        &rect,
+                        None,
+                        None,
+                    );
+                }
 
                 render_group(scene, g, Affine::IDENTITY, global_transform, error_handler);
 
-                if did_push_layer {
+                if clip_path.is_some() {
+                    scene.pop_layer();
+                }
+                if needs_layer {
                     scene.pop_layer();
                 }
             }
@@ -143,6 +139,107 @@ pub(crate) fn render_group<S: PaintScene, F: FnMut(&mut S, &usvg::Node)>(
                     error_handler,
                 );
             }
+        }
+    }
+}
+
+fn render_clip_path<S: PaintScene>(
+    scene: &mut S,
+    clip_path: &usvg::ClipPath,
+    transform: Affine,
+    bounds_transform: Affine,
+    bounds: &kurbo::Rect,
+) {
+    if let Some(linked_clip) = clip_path.clip_path() {
+        render_clip_path(scene, linked_clip, transform, bounds_transform, bounds);
+        scene.push_layer(
+            BlendMode {
+                mix: peniko::Mix::Normal,
+                compose: Compose::SrcIn,
+            },
+            1.0,
+            bounds_transform,
+            bounds,
+            None,
+            None,
+        );
+    }
+
+    let clip_transform = transform * util::to_affine(&clip_path.transform());
+    // Opaque white fills combine by alpha, so overlapping children form a union
+    // independently of their winding direction. Each fill still applies its own rule.
+    render_clip_group(
+        scene,
+        clip_path.root(),
+        clip_transform,
+        bounds_transform,
+        bounds,
+    );
+
+    if clip_path.clip_path().is_some() {
+        scene.pop_layer();
+    }
+}
+
+fn render_clip_group<S: PaintScene>(
+    scene: &mut S,
+    group: &usvg::Group,
+    transform: Affine,
+    bounds_transform: Affine,
+    bounds: &kurbo::Rect,
+) {
+    for node in group.children() {
+        let node_transform = transform * util::to_affine(&node.abs_transform());
+        match node {
+            Node::Path(path) if path.is_visible() => {
+                let Some(fill) = path.fill() else {
+                    continue;
+                };
+                let local_path = util::to_bez_path(path);
+                let rule = match fill.rule() {
+                    usvg::FillRule::NonZero => Fill::NonZero,
+                    usvg::FillRule::EvenOdd => Fill::EvenOdd,
+                };
+                scene.fill(rule, node_transform, Color::WHITE, None, &local_path);
+            }
+            Node::Group(child_group) => {
+                if let Some(child_clip) = child_group.clip_path() {
+                    scene.push_layer(
+                        BlendMode {
+                            mix: peniko::Mix::Normal,
+                            compose: Compose::SrcOver,
+                        },
+                        1.0,
+                        bounds_transform,
+                        bounds,
+                        None,
+                        None,
+                    );
+                    render_clip_group(scene, child_group, transform, bounds_transform, bounds);
+                    // Replace the group's temporary mask with the intersection of
+                    // its content and the child clip's mask.
+                    scene.push_layer(
+                        BlendMode {
+                            mix: peniko::Mix::Normal,
+                            compose: Compose::SrcIn,
+                        },
+                        1.0,
+                        bounds_transform,
+                        bounds,
+                        None,
+                        None,
+                    );
+                    render_clip_path(scene, child_clip, node_transform, bounds_transform, bounds);
+                    scene.pop_layer();
+                    scene.pop_layer();
+                } else {
+                    render_clip_group(scene, child_group, transform, bounds_transform, bounds);
+                }
+            }
+            Node::Text(text) => {
+                render_clip_group(scene, text.flattened(), transform, bounds_transform, bounds);
+            }
+            Node::Path(_) | Node::Image(_) => {}
         }
     }
 }

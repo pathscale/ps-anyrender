@@ -40,10 +40,14 @@ jobs:
     name: ${{ inputs.dry_run && 'Verify' || 'Publish' }}
     runs-on: ubicloud-standard-8
     steps:
-      - uses: actions/checkout@v4
+      - name: Require master ref
+        run: test "$GITHUB_REF" = refs/heads/master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
       - name: Install development libraries
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
 
@@ -53,16 +57,17 @@ jobs:
       # "failed to select a version", which reads as a version problem rather
       # than an ordering one.
       #
-      # `--no-verify` is deliberately not used: verification is what catches a
-      # crate that compiles against the working tree but not against what the
-      # registry actually serves, which is the whole class of bug this exists
-      # to stop.
+      # Verify releases locally. The manual dry run also builds the packaged
+      # crates without credentials. Uploads skip the verification build so
+      # crate and dependency build scripts cannot inherit the upload token.
       - name: Publish in dependency order
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ !inputs.dry_run && secrets.CARGO_REGISTRY_TOKEN || '' }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          # Pass the token only to the Cargo upload command.
+          export -n CARGO_REGISTRY_TOKEN
           # `ps-anyrender-vello-hybrid` is absent on purpose. It is excluded
           # from `[workspace] members` until it is ported to ps-vello 0.2, and
           # `cargo publish -p` resolves against the workspace, so naming it here
@@ -79,7 +84,7 @@ jobs:
           for crate in "${crates[@]}"; do
             if [ "$DRY_RUN" = "true" ]; then
               echo "::group::dry-run $crate"
-              cargo publish --dry-run -p "$crate"
+              cargo publish --registry crates-io --dry-run -p "$crate"
               echo "::endgroup::"
               continue
             fi
@@ -98,32 +103,48 @@ jobs:
             #
             # That is the manifest talking back, so every crate looks published
             # at whatever the tree says and the skip becomes meaningless.
-            version=$(cargo metadata --format-version 1 --no-deps \
-              | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$crate'))")
-            published=$(curl -sS "https://crates.io/api/v1/crates/$crate" \
-              -H "User-Agent: pathscale-publish-workflow" \
-              | python3 -c "import json,sys;print('\n'.join(v['num'] for v in json.load(sys.stdin).get('versions',[])))" \
-              || true)
-            if printf '%s\n' "$published" | grep -qx "$version"; then
+            case "$crate" in
+              ps-anyrender) manifest=crates/anyrender/Cargo.toml ;;
+              ps-anyrender-vello) manifest=crates/anyrender_vello/Cargo.toml ;;
+              ps-anyrender-vello-cpu) manifest=crates/anyrender_vello_cpu/Cargo.toml ;;
+              ps-anyrender-svg) manifest=crates/anyrender_svg/Cargo.toml ;;
+              *) echo "unknown crate" >&2; exit 1 ;;
+            esac
+            version=$(sed -nE 's/^version = "([^"]+)".*/\1/p' "$manifest")
+            [[ "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || exit 1
+            index_url="https://index.crates.io/${crate:0:2}/${crate:2:2}/$crate"
+            index_reply=$(curl --silent --show-error --connect-timeout 10 --max-time 30 --write-out '\n%{http_code}' "$index_url")
+            index_status=${index_reply##*$'\n'}
+            case "$index_status" in
+              200) published=${index_reply%$'\n'*} ;;
+              404) published= ;;
+              *) echo "registry lookup failed: $index_status" >&2; exit 1 ;;
+            esac
+            if printf '%s\n' "$published" | grep -F "\"vers\":\"$version\"" > /dev/null; then
               echo "$crate $version is already on crates.io, skipping"
               continue
             fi
 
             echo "::group::publish $crate $version"
-            cargo publish -p "$crate"
+            CARGO_REGISTRY_TOKEN="$CARGO_REGISTRY_TOKEN" \
+              cargo publish --registry crates-io --no-verify -p "$crate"
             echo "::endgroup::"
 
             # The index is not immediately readable after an upload, and the
             # next crate in the list resolves against it.
             echo "waiting for the index to carry $crate $version"
+            index_live=false
             for _ in $(seq 1 30); do
-              if curl -sS "https://crates.io/api/v1/crates/$crate" \
-                   -H "User-Agent: pathscale-publish-workflow" \
-                 | python3 -c "import json,sys;print('\n'.join(v['num'] for v in json.load(sys.stdin).get('versions',[])))" \
-                 | grep -qx "$version"; then
+              if curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$index_url" \
+                 | grep -F "\"vers\":\"$version\"" > /dev/null; then
+                index_live=true
                 echo "$crate $version is live"
                 break
               fi
               sleep 10
             done
+            if [ "$index_live" != true ]; then
+              echo "registry propagation timed out" >&2
+              exit 1
+            fi
           done

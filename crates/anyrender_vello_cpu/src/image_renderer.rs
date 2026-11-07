@@ -1,7 +1,7 @@
 use crate::VelloCpuScenePainter;
 use anyrender::{ImageRenderer, RenderContext as AnyRenderContext};
 use debug_timer::debug_timer;
-use vello_cpu::{PixmapMut, RenderContext};
+use vello_cpu::PixmapMut;
 
 pub struct VelloCpuImageRenderer {
     scene: VelloCpuScenePainter,
@@ -18,11 +18,11 @@ impl ImageRenderer for VelloCpuImageRenderer {
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        self.scene.render_ctx = RenderContext::new(width as u16, height as u16);
+        self.scene.resize(width as u16, height as u16);
     }
 
     fn reset(&mut self) {
-        self.scene.render_ctx.reset();
+        self.scene.reset();
     }
 
     fn render<F: FnOnce(&mut Self::ScenePainter<'_>)>(&mut self, draw_fn: F, buffer: &mut [u8]) {

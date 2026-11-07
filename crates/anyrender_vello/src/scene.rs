@@ -11,6 +11,8 @@ use peniko::{
 };
 
 const DEFAULT_TOLERANCE: f64 = 0.1;
+const MAX_BACKDROP_SEGMENTS: usize = 8;
+const MAX_BACKDROP_JOBS: usize = 32;
 use rustc_hash::FxHashMap;
 use vello::Renderer as VelloRenderer;
 use wgpu::Texture;
@@ -168,6 +170,13 @@ impl VelloScenePainter<'_, '_> {
         ) else {
             return;
         };
+
+        // Stop before recording a planner op or reserving any textures.
+        if state.jobs >= MAX_BACKDROP_JOBS
+            || state.segments.boundaries.len() >= MAX_BACKDROP_SEGMENTS
+        {
+            return;
+        }
 
         let device_clip = transform * clip.into_path(DEFAULT_TOLERANCE);
         let bounds = device_clip.bounding_box();
