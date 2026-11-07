@@ -82,6 +82,9 @@ impl ImageRenderer for VelloImageRenderer {
         draw_fn: F,
         cpu_buffer: &mut [u8],
     ) {
+        // A previous frame may have returned early after recording into the
+        // retained scene. Start every attempt from a clean scene.
+        self.scene.reset();
         let size = self.buffer_renderer.size();
         let mut painter = VelloScenePainter {
             inner: &mut self.scene,
@@ -104,7 +107,7 @@ impl ImageRenderer for VelloImageRenderer {
         draw_fn(&mut painter);
         let (segments, _plan) = painter.finish_backdrops();
 
-        crate::backdrop::execute(
+        let result = crate::backdrop::execute(
             &mut self.backdrop,
             &mut self.vello_renderer,
             self.buffer_renderer.device(),
@@ -118,12 +121,113 @@ impl ImageRenderer for VelloImageRenderer {
                 height: size.height,
                 antialiasing_method: vello::AaConfig::Area,
             },
-        )
-        .expect("Got non-Send/Sync error from rendering");
+        );
+        self.backdrop
+            .end_frame(&mut self.vello_renderer, &mut self.texture_handles);
+        result.expect("Got non-Send/Sync error from rendering");
 
         self.buffer_renderer.copy_texture_to_buffer(cpu_buffer);
 
         // Empty the Vello scene (memory optimisation)
         self.scene.reset();
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use anyrender::{
+        filters::{Filter, FilterEffect},
+        PaintScene,
+    };
+    use kurbo::{Affine, Rect};
+    use peniko::{Color, Fill, Mix};
+    use std::sync::Arc;
+
+    const WIDTH: u32 = 200;
+    const HEIGHT: u32 = 100;
+    const SEAM: u32 = WIDTH / 2;
+
+    fn gpu_available() -> bool {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::from_env().unwrap_or_default(),
+            flags: wgpu::InstanceFlags::from_build_config().with_env(),
+            backend_options: wgpu::BackendOptions::from_env_or_default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: None,
+        });
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .is_ok()
+    }
+
+    fn draw_backdrop(scene: &mut VelloScenePainter<'_, '_>) {
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::BLACK,
+            None,
+            &Rect::new(0.0, 0.0, SEAM as f64, HEIGHT as f64),
+        );
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::WHITE,
+            None,
+            &Rect::new(SEAM as f64, 0.0, WIDTH as f64, HEIGHT as f64),
+        );
+        let panel = Rect::new(40.0, 0.0, 160.0, HEIGHT as f64);
+        scene.push_layer(
+            Mix::Normal,
+            1.0,
+            Affine::IDENTITY,
+            &panel,
+            None,
+            Some(Arc::new(Filter::single(FilterEffect::blur(12.0)))),
+        );
+        scene.pop_layer();
+    }
+
+    fn pixel(buffer: &[u8], x: u32, y: u32) -> u8 {
+        buffer[((y * WIDTH + x) * 4) as usize]
+    }
+
+    #[test]
+    fn reused_headless_renderer_releases_idle_backdrop_registrations() {
+        if !gpu_available() {
+            eprintln!(
+                "reused_headless_renderer_releases_idle_backdrop_registrations: \
+                 no GPU adapter; skipped"
+            );
+            return;
+        }
+
+        let mut renderer = VelloImageRenderer::new(WIDTH, HEIGHT);
+        let mut buffer = Vec::new();
+        renderer.render_to_vec(draw_backdrop, &mut buffer);
+        assert_eq!(renderer.texture_handles.len(), 2);
+
+        let ramp: Vec<u8> = (0..7)
+            .map(|i| pixel(&buffer, SEAM - 18 + i * 6, HEIGHT / 2))
+            .collect();
+        assert!(ramp.windows(2).all(|window| window[1] >= window[0]));
+        assert!(ramp[0] < 96 && *ramp.last().unwrap() > 160, "got {ramp:?}");
+        assert!(ramp.iter().any(|v| (32..=224).contains(v)), "blur must survive trim/reuse: {ramp:?}");
+
+        for _ in 0..179 {
+            renderer.render_to_vec(|_| {}, &mut buffer);
+        }
+        assert_eq!(renderer.texture_handles.len(), 2);
+
+        renderer.render_to_vec(|_| {}, &mut buffer);
+        assert!(renderer.texture_handles.is_empty());
+
+        renderer.render_to_vec(draw_backdrop, &mut buffer);
+        assert_eq!(renderer.texture_handles.len(), 2);
+        let ramp: Vec<u8> = (0..7)
+            .map(|i| pixel(&buffer, SEAM - 18 + i * 6, HEIGHT / 2))
+            .collect();
+        assert!(ramp.windows(2).all(|window| window[1] >= window[0]));
+        assert!(ramp[0] < 96 && *ramp.last().unwrap() > 160, "got {ramp:?}");
+        assert!(ramp.iter().any(|v| (32..=224).contains(v)), "blur must survive trim/reuse: {ramp:?}");
     }
 }
