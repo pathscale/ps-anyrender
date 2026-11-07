@@ -41,10 +41,12 @@ jobs:
     steps:
       - name: Require master ref
         run: test "$GITHUB_REF" = refs/heads/master
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
       - name: Install development libraries
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
 
@@ -54,16 +56,17 @@ jobs:
       # "failed to select a version", which reads as a version problem rather
       # than an ordering one.
       #
-      # `--no-verify` is deliberately not used: verification is what catches a
-      # crate that compiles against the working tree but not against what the
-      # registry actually serves, which is the whole class of bug this exists
-      # to stop.
+      # Verify releases locally. The manual dry run also builds the packaged
+      # crates without credentials. Uploads skip the verification build so
+      # crate and dependency build scripts cannot inherit the upload token.
       - name: Publish in dependency order
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ !inputs.dry_run && secrets.CARGO_REGISTRY_TOKEN || '' }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          # Pass the token only to the Cargo upload command.
+          export -n CARGO_REGISTRY_TOKEN
           # `ps-anyrender-vello-hybrid` is absent on purpose. It is excluded
           # from `[workspace] members` until it is ported to ps-vello 0.2, and
           # `cargo publish -p` resolves against the workspace, so naming it here
@@ -122,7 +125,8 @@ jobs:
             fi
 
             echo "::group::publish $crate $version"
-            cargo publish --registry crates-io -p "$crate"
+            CARGO_REGISTRY_TOKEN="$CARGO_REGISTRY_TOKEN" \
+              cargo publish --registry crates-io --no-verify -p "$crate"
             echo "::endgroup::"
 
             # The index is not immediately readable after an upload, and the
