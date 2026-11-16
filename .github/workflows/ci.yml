@@ -1,14 +1,6 @@
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches:
-      # `master`, this repository's default branch. It said `main`, inherited
-      # from upstream, so push CI never ran here and the cache below was never
-      # saved.
-      - master
-  # For `check-wasm-hybrid`, which is manual on purpose. See its comment.
   workflow_dispatch:
 
 concurrency:
