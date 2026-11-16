@@ -109,8 +109,26 @@ impl Filter {
     ///
     /// Returns a `FilterId` that can be referenced by other primitives.
     /// Automatically updates the accumulated bounds expansion based on the primitive's requirements.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a result input does not reference an earlier node or if another node
+    /// cannot be represented by `FilterId`.
     pub fn add(&mut self, effect: FilterEffect, inputs: FilterInputs) -> FilterId {
-        let id = FilterId(self.primitives.len() as u16);
+        let index = self.primitives.len();
+        assert!(
+            index <= usize::from(u16::MAX),
+            "filter graph exceeds FilterId capacity"
+        );
+        for input in [&inputs.primary, &inputs.secondary] {
+            if let Some(FilterInput::Result(input_id)) = input {
+                assert!(
+                    usize::from(input_id.0) < index,
+                    "filter inputs must reference an earlier node"
+                );
+            }
+        }
+        let id = FilterId(index as u16);
 
         // Update accumulated expansion by taking the union of rects
         let primitive_rect = effect.expansion_rect();

@@ -1,7 +1,7 @@
 [package]
 name = "ps-anyrender-vello"
 description = "Vello backend for anyrender"
-version = "0.14.2"
+version = "0.15.0"
 documentation = "https://docs.rs/ps-anyrender-vello"
 homepage.workspace = true
 repository.workspace = true
@@ -17,6 +17,7 @@ wgpu_context.workspace = true
 
 debug_timer = { workspace = true }
 kurbo = { workspace = true }
+log = { workspace = true }
 peniko = { workspace = true }
 vello = { workspace = true }
 wgpu = { workspace = true }

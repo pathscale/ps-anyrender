@@ -319,6 +319,8 @@ mod svg_path {
     where
         S: Serializer,
     {
+        // Refuse what `deserialize` would refuse, so a written archive always reads back.
+        svg_path_parser::check_serializable(path).map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&path.to_svg())
     }
 

@@ -440,6 +440,10 @@ impl WindowRenderer for VelloWindowRenderer {
 
         debug_timer!(timer, feature = "log_frame_times");
 
+        // A failed surface acquisition or present can leave the preceding
+        // frame recorded. Start every frame empty, including those retries.
+        self.scene.reset();
+
         // Regenerate the vello scene
         let frame = (render_surface.config.width, render_surface.config.height);
         let mut painter = VelloScenePainter {
@@ -463,6 +467,9 @@ impl WindowRenderer for VelloWindowRenderer {
 
         let Ok(texture_view) = render_surface.target_texture_view() else {
             // Skip frame in case of error trying to get current surface texture
+            self.backdrop
+                .end_frame(&mut state.renderer, &mut self.texture_handles);
+            self.scene.reset();
             render_surface.clear_surface_texture();
             return;
         };
@@ -471,7 +478,7 @@ impl WindowRenderer for VelloWindowRenderer {
             state.renderer.mark_override_image_dirty(handle);
         }
 
-        crate::backdrop::execute(
+        let render_result = crate::backdrop::execute(
             &mut self.backdrop,
             &mut state.renderer,
             render_surface.device(),
@@ -485,8 +492,7 @@ impl WindowRenderer for VelloWindowRenderer {
                 height: render_surface.config.height,
                 antialiasing_method: self.config.antialiasing_method,
             },
-        )
-        .expect("failed to render to texture");
+        );
         timer.record_time("render");
 
         // Before the present, which can bail out early: the pool has to be told
@@ -497,7 +503,17 @@ impl WindowRenderer for VelloWindowRenderer {
 
         drop(texture_view);
 
-        if render_surface.maybe_blit_and_present().is_err() {
+        if let Err(error) = render_result {
+            log::warn!("vello: render failed, frame dropped: {error:?}");
+            self.scene.reset();
+            render_surface.clear_surface_texture();
+            return;
+        }
+
+        if let Err(error) = render_surface.maybe_blit_and_present() {
+            log::warn!("vello: present failed, frame dropped: {error:?}");
+            self.scene.reset();
+            render_surface.clear_surface_texture();
             return;
         }
         timer.record_time("present");
@@ -506,7 +522,12 @@ impl WindowRenderer for VelloWindowRenderer {
         // configuration. Waiting for the GPU to finish here serializes CPU scene building
         // with GPU execution and prevents high-refresh displays from using the frame queue.
         // A non-blocking poll still advances mapping callbacks and resource retirement.
-        render_surface.device().poll(wgpu::PollType::Poll).unwrap();
+        if let Err(error) = render_surface.device().poll(wgpu::PollType::Poll) {
+            log::warn!("vello: device poll failed after present: {error:?}");
+            self.scene.reset();
+            render_surface.clear_surface_texture();
+            return;
+        }
 
         timer.record_time("poll");
         timer.print_times("vello: ");
